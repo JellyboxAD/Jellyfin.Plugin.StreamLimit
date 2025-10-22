@@ -2,6 +2,11 @@
 
 A Jellyfin plugin that allows you to limit the number of simultaneous streams per user.
 
+## Manifest URL
+```
+https://raw.githubusercontent.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/refs/heads/main/manifest.json
+```
+
 ## Features
 
 - 🎮 Limit streams per user
