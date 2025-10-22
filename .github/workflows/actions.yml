@@ -1,2 +1,0 @@
-- name: SHA256 Checksum
-  uses: Huy-Ngo/gha-sha@v1.1.0
