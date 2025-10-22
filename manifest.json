@@ -2,31 +2,35 @@
     {
         "guid": "d98fbe02-daf3-4c09-a832-4b4e1d07326c",
         "name": "StreamLimiter",
-        "description": "Limit the number of streams a user can have.",
-        "overview": "Limit the number of streams a user can have.",
+        "overview": "Limits the number of simultaneous streams per user.",
+        "description": "A Jellyfin plugin that allows you to limit the number of simultaneous streams per user. Features include customizable messages and automatic session management.",
         "owner": "JellyboxAD",
-        "category": "General",
+        "category": "Utilities",
+        "imageUrl": "https://raw.githubusercontent.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/refs/heads/main/Readme-data/LOGO.png",
         "versions": [
             {
                 "version": "1.0.0.2",
                 "changelog": "- Updated to 10.11 compatible version",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/releases/download/v1.0.0.2/StreamLimit-v1.0.0.2.zip",
-                "timestamp": "2025-10-22T19:30:34Z"
+                "timestamp": "2025-10-22T19:30:34Z",
+                "checksum": "719EE0EB432B0ED7DF3466DD8152394A"
             },
             {
                 "version": "1.0.0.1",
                 "changelog": "- Updated controller \n- Fixed iOS error \n- Fixed configuration management \n- Add TRY in cancel session",
                 "targetAbi": "10.10.5.0",
                 "sourceUrl": "https://github.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/releases/download/v1.0.0.1/StreamLimit-v1.0.0.1.zip",
-                "timestamp": "2025-10-22T19:30:34Z"
+                "timestamp": "2025-02-05T00:00:00Z",
+                 "checksum": "C9185C04FE5B6C72370250EBFE70DFFE"
             },
             {
                 "version": "1.0.0.0",
                 "changelog": "- Initial version",
                 "targetAbi": "10.10.5.0",
                 "sourceUrl": "https://github.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/releases/download/v1.0.0.0/StreamLimit-v1.0.0.0.zip",
-                "timestamp": "2025-10-22T19:30:34Z"
+                "timestamp": "2024-12-26T00:00:00Z",
+                "checksum": "1CFA8D592850A1DB014C28989A0E3713"
             }
         ]
     }
