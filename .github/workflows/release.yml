@@ -1,0 +1,30 @@
+on: 
+  push:
+    tags:
+      - "**"
+      
+jobs:
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+      - name: Download releaseartifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: release-artifacts
+          path: release
+      - name: Generate checksum
+        uses: jmgilman/actions-generate-checksum@v1
+        with:
+          patterns: |
+            release/*.zip
+            release/*.tar.gz
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            checksum.txt
+            release/*.zip
+            release/*.tar.gz
