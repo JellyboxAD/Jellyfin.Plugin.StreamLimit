@@ -21,10 +21,3 @@ jobs:
           patterns: |
             release/*.zip
             release/*.tar.gz
-      - name: Create release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            checksum.txt
-            release/*.zip
-            release/*.tar.gz
