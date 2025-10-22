@@ -1,3 +1,8 @@
+on: 
+  push:
+    tags:
+      - "**"
+      
 jobs:
   release:
     name: Create release
