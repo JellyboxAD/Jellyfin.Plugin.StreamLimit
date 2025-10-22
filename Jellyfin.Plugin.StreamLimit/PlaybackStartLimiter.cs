@@ -23,6 +23,7 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
     private readonly IHttpContextAccessor _authenticationManager;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IDeviceManager _deviceManager;
+    private readonly IMediaSourceManager _mediaSourceManager;
     private readonly ILogger<PlaybackStartLimiter> _logger;
     private PluginConfiguration? _configuration;
     private Dictionary<string, int> _userData = new();
@@ -36,12 +37,14 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
         [NotNull] ISessionManager sessionManager,
         [NotNull] IHttpContextAccessor authenticationManager,
         [NotNull] ILoggerFactory loggerFactory,
-        [NotNull] IDeviceManager deviceManager)
+        [NotNull] IDeviceManager deviceManager,
+        [NotNull] IMediaSourceManager mediaSourceManager)
     {
         _sessionManager = sessionManager;
         _authenticationManager = authenticationManager;
         _loggerFactory = loggerFactory;
         _deviceManager = deviceManager;
+        _mediaSourceManager = mediaSourceManager;
         _logger = loggerFactory.CreateLogger<PlaybackStartLimiter>();
         _configuration = Plugin.Instance?.Configuration as PluginConfiguration;
 
@@ -104,6 +107,11 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
 
             var userId = e.Users[0].Id.ToString();
             _logger.LogInformation("[{TaskNumber}] Playback Started : {UserId}", taskNumber, userId);
+            _logger.LogInformation("[{TaskNumber}] PlaySessionId: {PlaySessionId}", taskNumber, e.PlaySessionId);
+            _logger.LogInformation("[{TaskNumber}] MediaSourceId: {MediaSourceId}", taskNumber, e.MediaSourceId);
+            _logger.LogInformation("[{TaskNumber}] Device: {DeviceName} ({DeviceId})", taskNumber, e.Session.DeviceName, e.Session.DeviceId);
+            _logger.LogInformation("[{TaskNumber}] Client: {Client}", taskNumber, e.Session.Client);
+            _logger.LogInformation("[{TaskNumber}] Session.PlayState.LiveStreamId: {LiveStreamId}", taskNumber, e.Session.PlayState?.LiveStreamId ?? "(null)");
 
             var activeStreamsForUser = _sessionManager.Sessions.Count(s =>
                 s.UserId == Guid.Parse(userId) &&
@@ -146,12 +154,73 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
 
         try
         {
+            // 1. PRIORITY: Close the LiveStream to cut network stream (for external players like VLC, Infuse, mobile apps)
+            if (session.PlayState?.LiveStreamId != null)
+            {
+                _logger.LogInformation("[{TaskNumber}] LiveStreamId detected: {LiveStreamId}", taskNumber, session.PlayState.LiveStreamId);
+                await CloseLiveStream(session.PlayState.LiveStreamId, taskNumber);
+            }
+            else
+            {
+                _logger.LogInformation("[{TaskNumber}] No LiveStreamId found in session PlayState", taskNumber);
+                
+                // Try to find and close any LiveStream using MediaSourceId
+                if (session.PlayState?.MediaSourceId != null)
+                {
+                    _logger.LogInformation("[{TaskNumber}] Attempting to find LiveStream via MediaSourceId: {MediaSourceId}", taskNumber, session.PlayState.MediaSourceId);
+                    try
+                    {
+                        var liveStreamInfo = _mediaSourceManager.GetLiveStreamInfo(session.PlayState.MediaSourceId);
+                        if (liveStreamInfo != null)
+                        {
+                            _logger.LogInformation("[{TaskNumber}] Found LiveStream via MediaSourceId, closing it", taskNumber);
+                            await CloseLiveStream(session.PlayState.MediaSourceId, taskNumber);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogInformation("[{TaskNumber}] No LiveStream found for MediaSourceId (this is normal for Direct Play): {Error}", taskNumber, ex.Message);
+                    }
+                }
+            }
+
+            // 2. Stop playback command (for web players that listen to commands)
             await StopPlayback(session, taskNumber);
+            
+            // Wait a bit and verify playback actually stopped
             await Task.Delay(500);
+            if (!await VerifyPlaybackStopped(session, taskNumber))
+            {
+                _logger.LogWarning("[{TaskNumber}] ⚠️ Playback did NOT stop after command - trying aggressive methods", taskNumber);
+                
+                // Try multiple stop commands
+                for (int i = 0; i < 3; i++)
+                {
+                    await StopPlayback(session, taskNumber);
+                    await Task.Delay(200);
+                    
+                    if (await VerifyPlaybackStopped(session, taskNumber))
+                    {
+                        _logger.LogInformation("[{TaskNumber}] ✅ Playback stopped after {Attempts} attempts", taskNumber, i + 2);
+                        break;
+                    }
+                }
+            }
+            
+            // 3. Show message to user
             await ShowLimitMessage(session, taskNumber);
+            
+            // 4. Logout session as final measure
             await LogoutSession(session, taskNumber);
 
-            _logger.LogInformation("[{TaskNumber}] Limited : Play Canceled", taskNumber);
+            // Final verification
+            await Task.Delay(500);
+            var finalCheck = await VerifyPlaybackStopped(session, taskNumber);
+            _logger.LogInformation(
+                "[{TaskNumber}] {Result} : Play {Status}",
+                taskNumber,
+                finalCheck ? "SUCCESS" : "PARTIAL",
+                finalCheck ? "Fully Canceled" : "Stopped but session may persist");
         }
         catch (Exception stopEx)
         {
@@ -175,12 +244,54 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
                 },
                 CancellationToken.None);
 
-            _logger.LogInformation("[{TaskNumber}] Successfully sent stop command", taskNumber);
+            _logger.LogInformation("[{TaskNumber}] Stop command sent (not verified yet)", taskNumber);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[{TaskNumber}] Failed to send stop command", taskNumber);
             throw;
+        }
+    }
+
+    private async Task<bool> VerifyPlaybackStopped(SessionInfo session, int taskNumber)
+    {
+        try
+        {
+            // Wait a moment for the session state to update
+            await Task.Delay(100);
+            
+            // Get fresh session data
+            var updatedSession = _sessionManager.Sessions.FirstOrDefault(s => s.Id == session.Id);
+            
+            if (updatedSession == null)
+            {
+                _logger.LogInformation("[{TaskNumber}] ✅ Session no longer exists - playback stopped", taskNumber);
+                return true;
+            }
+
+            var isStillPlaying = updatedSession.NowPlayingItem != null && updatedSession.IsActive;
+            
+            if (isStillPlaying)
+            {
+                _logger.LogWarning(
+                    "[{TaskNumber}] ❌ Playback still active! NowPlayingItem: {Item}, IsActive: {IsActive}",
+                    taskNumber,
+                    updatedSession.NowPlayingItem?.Name ?? "(null)",
+                    updatedSession.IsActive);
+                return false;
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "[{TaskNumber}] ✅ Playback stopped confirmed - NowPlayingItem is null or session inactive",
+                    taskNumber);
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[{TaskNumber}] Failed to verify playback stopped", taskNumber);
+            return false; // Assume not stopped if we can't verify
         }
     }
 
@@ -210,10 +321,33 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
         }
     }
 
+    private async Task CloseLiveStream(string liveStreamId, int taskNumber)
+    {
+        try
+        {
+            _logger.LogInformation("[{TaskNumber}] Attempting to close LiveStream {LiveStreamId}", taskNumber, liveStreamId);
+            
+            await _mediaSourceManager.CloseLiveStream(liveStreamId);
+            
+            _logger.LogInformation("[{TaskNumber}] ✅ Successfully closed LiveStream - network stream cut!", taskNumber);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[{TaskNumber}] Failed to close LiveStream {LiveStreamId}", taskNumber, liveStreamId);
+            // Don't throw - continue with other stop methods
+        }
+    }
+
     private async Task LogoutSession(SessionInfo session, int taskNumber)
     {
         try
         {
+            // First, try to end the session directly (more aggressive than logout)
+            _logger.LogInformation("[{TaskNumber}] Forcefully ending session {SessionId}", taskNumber, session.Id);
+            await _sessionManager.ReportSessionEnded(session.Id);
+            _logger.LogInformation("[{TaskNumber}] Session ended via ReportSessionEnded", taskNumber);
+            
+            // Also try logout as backup
             await _sessionManager.Logout(session.Id);
             _logger.LogInformation("[{TaskNumber}] Successfully logged out session", taskNumber);
         }
