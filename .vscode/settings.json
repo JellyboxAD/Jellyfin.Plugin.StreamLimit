@@ -12,4 +12,6 @@
     "jellyfinDataDir" : "${env:LOCALAPPDATA}/jellyfin",
     // The name of the plugin
     "pluginName" : "Jellyfin.Plugin.StreamLimit",
+
+    "dotnetVersion" : "net9.0"
 }

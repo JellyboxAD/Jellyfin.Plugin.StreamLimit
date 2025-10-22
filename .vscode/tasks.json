@@ -46,7 +46,9 @@
         "type": "shell",
         "command": "cp",
         "args": [
-           "./${config:pluginName}/bin/Release/net8.0/*",
+           "-Recurse",
+           "-Force",
+           "./${config:pluginName}/bin/Release/${config:dotnetVersion}/*",
            "${config:jellyfinDataDir}/plugins/${config:pluginName}/"
         ]
 
