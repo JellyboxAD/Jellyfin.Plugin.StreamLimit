@@ -3,34 +3,143 @@
 <head>
     <meta charset="utf-8">
     <title>Stream Limiter</title>
+    <style>
+        .slSection { margin-bottom: 2em; }
+        .slBadge {
+            display: inline-block;
+            font-size: 0.7em;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            vertical-align: middle;
+            padding: 0.15em 0.5em;
+            margin-left: 0.6em;
+            border-radius: 0.75em;
+            background: #cc7b19;
+            color: #fff;
+        }
+        .slLead {
+            margin: 0.2em 0 1.2em;
+            opacity: 0.85;
+            line-height: 1.5;
+        }
+        .slNote {
+            border-left: 3px solid #00a4dc;
+            padding: 0.6em 0.9em;
+            margin: 1em 0;
+            background: rgba(0, 164, 220, 0.08);
+            line-height: 1.5;
+        }
+        .slNote.slBeta { border-left-color: #cc7b19; background: rgba(204, 123, 25, 0.08); }
+        .slSub { margin: 1.2em 0 0.4em; font-weight: 600; opacity: 0.9; }
+    </style>
 </head>
 <body>
     <div id="StreamLimiterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
         <div data-role="content">
             <div class="content-primary">
                 <form id="StreamLimiterConfigForm">
-                    <div class="selectContainer">
-                        <label class="selectLabel" for="Users">Users</label>
-                        <select is="emby-select" id="Users" name="Users"
-                                class="emby-select-withcolor emby-select"
-                                onchange="dropDownUsers_change()">
-                        </select>
+
+                    <!-- ============================ LIMITS ============================ -->
+                    <div class="verticalSection slSection">
+                        <h2 class="sectionTitle">Stream limits</h2>
+                        <p class="slLead">Set how many streams a user can play at the same time. A paused stream still counts as active.</p>
+
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="Users">User</label>
+                            <select is="emby-select" id="Users" name="Users" class="emby-select-withcolor emby-select"></select>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="MaxStreams">Max streams for this user</label>
+                            <input id="MaxStreams" name="MaxStreams" type="number" is="emby-input" min="0" step="1" />
+                            <div class="fieldDescription">Leave empty or 0 to remove this user's own limit (the default below applies instead). Users already having a limit are marked in the list.</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="DefaultMaxStreams">Default limit (all other users)</label>
+                            <input id="DefaultMaxStreams" name="DefaultMaxStreams" type="number" is="emby-input" min="0" step="1" />
+                            <div class="fieldDescription">Applied to every user without an explicit limit above. 0 = unlimited.</div>
+                        </div>
                     </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="MaxStreams">Max Streams for selected user</label>
-                        <input id="MaxStreams" name="MaxStreams" type="number" is="emby-input" min="0" />
-                        <div class="fieldDescription">Max Streams for selected user</div>
+
+                    <!-- ========================= ENFORCEMENT ========================= -->
+                    <div class="verticalSection slSection">
+                        <h2 class="sectionTitle">Enforcement</h2>
+                        <p class="slLead">How a stream over the limit is stopped. The recommended defaults work for every client, including ones that ignore remote stop commands.</p>
+
+                        <div class="slNote slBeta">
+                            <strong>BETA</strong> — the HTTP-level hard block below is new. It has been tested but is still maturing.
+                            If a legitimate stream is ever wrongly blocked, turn <em>Hard block</em> off to fall back to the
+                            classic behaviour (stop command after the stream starts).
+                        </div>
+
+                        <label class="checkboxContainer">
+                            <input id="EnableHardBlock" name="EnableHardBlock" type="checkbox" is="emby-checkbox" />
+                            <span>Hard block at the HTTP level <span class="slBadge">BETA</span></span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Recommended, on by default. Rejects the over-limit stream before a single byte is sent, so it works on <strong>every</strong> client (Swiftfin, Infuse, external players, custom apps...). Turn off to use only the classic stop-command behaviour.</div>
+
+                        <label class="checkboxContainer">
+                            <input id="BlockPlaybackInfo" name="BlockPlaybackInfo" type="checkbox" is="emby-checkbox" />
+                            <span>Refuse playback negotiation at the limit <span class="slBadge">BETA</span></span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">On by default. Denies the stream during setup so the client shows a clean "not allowed" dialog instead of failing mid-load. Requires <em>Hard block</em>.</div>
+
+                        <label class="checkboxContainer">
+                            <input id="KillTranscodeJobs" name="KillTranscodeJobs" type="checkbox" is="emby-checkbox" />
+                            <span>Kill the transcode job of a blocked stream</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">On by default. Stops the server-side ffmpeg process feeding a blocked stream — a safety net for clients that ignore the stop command.</div>
+
+                        <label class="checkboxContainer">
+                            <input id="ForceLogoutOnLimit" name="ForceLogoutOnLimit" type="checkbox" is="emby-checkbox" />
+                            <span>Log out the offending device</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Off by default. The most aggressive option: revokes the device's token (also cuts direct-play), but the user has to sign in again on that device.</div>
+
+                        <label class="checkboxContainer">
+                            <input id="BlockUnidentifiedRequests" name="BlockUnidentifiedRequests" type="checkbox" is="emby-checkbox" />
+                            <span>Strict mode: block requests with no identifiable user <span class="slBadge">BETA</span></span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Off by default. By default a request whose user can't be identified is let through (fail-open). Enable to reject those too — safer, but may break unusual clients. Only turn on if you need it.</div>
                     </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="MessageTitle">Message Title</label>
-                        <input id="MessageTitle" name="MessageTitle" type="text" is="emby-input" min="0" />
-                        <div class="fieldDescription">Title of the message</div>
+
+                    <!-- =========================== MESSAGE =========================== -->
+                    <div class="verticalSection slSection">
+                        <h2 class="sectionTitle">Blocked message</h2>
+                        <p class="slLead">What a blocked user sees. Set the wording once below; the two options control where it is shown.</p>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="MessageTitle">Title</label>
+                            <input id="MessageTitle" name="MessageTitle" type="text" is="emby-input" placeholder="Stream Limit" />
+                            <div class="fieldDescription">Heading of the popup shown when a stream is blocked.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="MessageText">Text</label>
+                            <input id="MessageText" name="MessageText" type="text" is="emby-input" placeholder="Active streams exceeded" />
+                            <div class="fieldDescription">Body of the popup, e.g. "You have reached your simultaneous streams limit."</div>
+                        </div>
+
+                        <div class="slSub">Where the message appears</div>
+
+                        <label class="checkboxContainer">
+                            <input id="EnableWebMessage" name="EnableWebMessage" type="checkbox" is="emby-checkbox" />
+                            <span>Show my message on web clients <span class="slBadge">BETA</span></span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Recommended, on by default. Displays a single clean popup with your title/text above — instead of the web client's own generic "not allowed" dialog. <strong>Web clients only</strong> (browser, Android app webview, iOS web). A browser refresh is needed after changing this.</div>
+
+                        <label class="checkboxContainer">
+                            <input id="ShowLimitPopup" name="ShowLimitPopup" type="checkbox" is="emby-checkbox" />
+                            <span>Also push a server message (advanced)</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Off by default. Sends a Jellyfin "display message" command. Only some native apps show it (e.g. Swiftfin), and it adds a second popup on web clients. Leave off unless you specifically want it for a native client.</div>
+
+                        <div class="slNote">
+                            <strong>Note on native apps.</strong> Swiftfin, AFinity, Streamyfin, Infuse and other native clients display their own
+                            error screen when a stream is blocked, and no server plugin can change or hide it — the block still works, only the
+                            wording is theirs. Custom wording is possible on web clients only.
+                        </div>
                     </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="MessageText">Message</label>
-                        <input id="MessageText" name="MessageText" type="text" is="emby-input" min="0" />
-                        <div class="fieldDescription">Detailed message</div>
-                    </div>
+
                     <div>
                         <button is="emby-button" type="submit" class="raised button-submit block emby-button">
                             <span>Save</span>
@@ -40,70 +149,143 @@
             </div>
         </div>
         <script type="text/javascript">
-            var StreamLimiterConfig = {
-                pluginUniqueId: 'd98fbe02-daf3-4c09-a832-4b4e1d07326c'
-            };
-            var usersWithValues = {};
-            function populateUsersWithValues(config) {
-                try {
-                    usersWithValues = JSON.parse(config.UserStreamLimits);
-                } catch {
-                    usersWithValues = {};
+            (function () {
+                var pluginUniqueId = 'd98fbe02-daf3-4c09-a832-4b4e1d07326c';
+                var usersWithValues = {};
+                var usersById = {};
+
+                function normalizeKey(id) {
+                    return (id || '').replace(/-/g, '').toLowerCase();
                 }
-            }
-            function dropDownUsers_change() {
-                const ddlUsers = document.getElementById('Users');
-                document.getElementById('MaxStreams').value = usersWithValues[ddlUsers.value];
-            }
-            document.querySelector('#StreamLimiterConfigPage')
-                .addEventListener('pageshow', function () {
-                    loadSettings();
-                });
 
-            document.querySelector('#StreamLimiterConfigForm')
-                .addEventListener('submit', function (e) {
-                    Dashboard.showLoadingMsg();
-                    ApiClient.getPluginConfiguration(StreamLimiterConfig.pluginUniqueId)
-                        .then(function (config) {
-                            const ddlUsers = document.getElementById('Users');
-                            populateUsersWithValues(config);
-                            const streams = document.getElementById('MaxStreams').value;
-                            usersWithValues[ddlUsers.value] = streams;
-                            config.UserStreamLimits = JSON.stringify(usersWithValues);
-                            config.MessageTitle = document.getElementById('MessageTitle').value;
-                            config.MessageText = document.getElementById('MessageText').value;
-                            ApiClient.updatePluginConfiguration(StreamLimiterConfig.pluginUniqueId, config)
-                                .then(function (result) {
-                                    Dashboard.processPluginConfigurationUpdateResult(result);
-                                });
-                        });
+                // Tolerant parse: legacy configs may contain string values or junk.
+                function parseLimits(json) {
+                    var result = {};
+                    if (!json) {
+                        return result;
+                    }
+                    var raw;
+                    try {
+                        raw = JSON.parse(json);
+                    } catch (e) {
+                        return result;
+                    }
+                    if (!raw || typeof raw !== 'object') {
+                        return result;
+                    }
+                    Object.keys(raw).forEach(function (key) {
+                        var value = parseInt(raw[key], 10);
+                        if (!isNaN(value) && value > 0) {
+                            result[normalizeKey(key)] = value;
+                        }
+                    });
+                    return result;
+                }
 
-                    e.preventDefault();
-                    return false;
-                });
-            function loadSettings() {
-                // Populate dropdown with users
-                ApiClient.getUsers().then(function (users) {
-                    const ddlUsers = document.getElementById('Users');
-                    users.forEach(user => {
-                        const option = document.createElement('option');
-                        option.value = user.Id;
-                        option.textContent = user.Name;
+                function userLabel(user) {
+                    var limit = usersWithValues[normalizeKey(user.Id)];
+                    return limit ? user.Name + ' — limit ' + limit : user.Name;
+                }
+
+                function populateUserDropdown(selectedValue) {
+                    var ddlUsers = document.getElementById('Users');
+                    // Rebuild from scratch: pageshow fires on every navigation and
+                    // appending again duplicated the entries.
+                    ddlUsers.innerHTML = '';
+                    Object.keys(usersById).forEach(function (id) {
+                        var option = document.createElement('option');
+                        option.value = id;
+                        option.textContent = userLabel(usersById[id]);
                         ddlUsers.appendChild(option);
                     });
+                    if (selectedValue && usersById[selectedValue]) {
+                        ddlUsers.value = selectedValue;
+                    }
+                    refreshMaxStreams();
+                }
 
-                    // Load saved configuration and populate numeric value for the selected user
-                    ApiClient.getPluginConfiguration(StreamLimiterConfig.pluginUniqueId)
-                        .then(function (config) {
-                            if (config.UserStreamLimits) {
-                                populateUsersWithValues(config);
-                                document.getElementById('MaxStreams').value = usersWithValues[ddlUsers.value];
-                                document.getElementById('MessageTitle').value = config.MessageTitle;
-                                document.getElementById('MessageText').value = config.MessageText;
-                            }
+                function refreshMaxStreams() {
+                    var ddlUsers = document.getElementById('Users');
+                    var limit = usersWithValues[normalizeKey(ddlUsers.value)];
+                    document.getElementById('MaxStreams').value = limit ? limit : '';
+                }
+
+                function loadSettings() {
+                    Dashboard.showLoadingMsg();
+                    Promise.all([
+                        ApiClient.getUsers(),
+                        ApiClient.getPluginConfiguration(pluginUniqueId)
+                    ]).then(function (results) {
+                        var users = results[0];
+                        var config = results[1];
+
+                        usersWithValues = parseLimits(config.UserStreamLimits);
+                        usersById = {};
+                        users.forEach(function (user) {
+                            usersById[user.Id] = user;
                         });
+
+                        populateUserDropdown();
+                        document.getElementById('DefaultMaxStreams').value = config.DefaultMaxStreams > 0 ? config.DefaultMaxStreams : '';
+                        document.getElementById('EnableHardBlock').checked = config.EnableHardBlock !== false;
+                        document.getElementById('BlockPlaybackInfo').checked = config.BlockPlaybackInfo !== false;
+                        document.getElementById('BlockUnidentifiedRequests').checked = config.BlockUnidentifiedRequests === true;
+                        document.getElementById('KillTranscodeJobs').checked = config.KillTranscodeJobs !== false;
+                        document.getElementById('ForceLogoutOnLimit').checked = config.ForceLogoutOnLimit === true;
+                        document.getElementById('EnableWebMessage').checked = config.EnableWebMessage !== false;
+                        document.getElementById('ShowLimitPopup').checked = config.ShowLimitPopup === true;
+                        document.getElementById('MessageTitle').value = config.MessageTitle || '';
+                        document.getElementById('MessageText').value = config.MessageText || '';
+                        Dashboard.hideLoadingMsg();
+                    }, function () {
+                        Dashboard.hideLoadingMsg();
+                    });
+                }
+
+                document.getElementById('Users').addEventListener('change', refreshMaxStreams);
+
+                document.querySelector('#StreamLimiterConfigPage').addEventListener('pageshow', loadSettings);
+
+                document.querySelector('#StreamLimiterConfigForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    Dashboard.showLoadingMsg();
+
+                    var ddlUsers = document.getElementById('Users');
+                    var selectedKey = normalizeKey(ddlUsers.value);
+                    var streams = parseInt(document.getElementById('MaxStreams').value, 10);
+
+                    if (selectedKey) {
+                        if (!isNaN(streams) && streams > 0) {
+                            usersWithValues[selectedKey] = streams;
+                        } else {
+                            delete usersWithValues[selectedKey];
+                        }
+                    }
+
+                    ApiClient.getPluginConfiguration(pluginUniqueId).then(function (config) {
+                        var defaultMax = parseInt(document.getElementById('DefaultMaxStreams').value, 10);
+
+                        config.UserStreamLimits = JSON.stringify(usersWithValues);
+                        config.DefaultMaxStreams = (!isNaN(defaultMax) && defaultMax > 0) ? defaultMax : 0;
+                        config.EnableHardBlock = document.getElementById('EnableHardBlock').checked;
+                        config.BlockPlaybackInfo = document.getElementById('BlockPlaybackInfo').checked;
+                        config.BlockUnidentifiedRequests = document.getElementById('BlockUnidentifiedRequests').checked;
+                        config.KillTranscodeJobs = document.getElementById('KillTranscodeJobs').checked;
+                        config.ForceLogoutOnLimit = document.getElementById('ForceLogoutOnLimit').checked;
+                        config.EnableWebMessage = document.getElementById('EnableWebMessage').checked;
+                        config.ShowLimitPopup = document.getElementById('ShowLimitPopup').checked;
+                        config.MessageTitle = document.getElementById('MessageTitle').value;
+                        config.MessageText = document.getElementById('MessageText').value;
+
+                        ApiClient.updatePluginConfiguration(pluginUniqueId, config).then(function (result) {
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                            populateUserDropdown(ddlUsers.value);
+                        });
+                    });
+
+                    return false;
                 });
-            }
+            })();
         </script>
     </div>
 </body>

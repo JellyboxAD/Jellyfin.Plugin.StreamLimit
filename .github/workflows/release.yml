@@ -1,23 +1,48 @@
-on: 
+name: Release plugin
+
+on:
   push:
     tags:
-      - "**"
-      
+      - "v*"
+
+permissions:
+  contents: write
+
 jobs:
   release:
-    name: Create release
+    name: Build and release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v2
-      - name: Download releaseartifacts
-        uses: actions/download-artifact@v2
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
-          name: release-artifacts
-          path: release
-      - name: Generate checksum
-        uses: jmgilman/actions-generate-checksum@v1
+          dotnet-version: "10.0.x"
+
+      - name: Run tests
+        run: dotnet test tests/Jellyfin.Plugin.StreamLimit.Tests/Jellyfin.Plugin.StreamLimit.Tests.csproj -c Release
+
+      - name: Build for Jellyfin 10.11 (net9.0)
+        run: dotnet publish Jellyfin.Plugin.StreamLimit/Jellyfin.Plugin.StreamLimit.csproj -c Release -o publish/net9
+
+      - name: Build for Jellyfin 12 (net10.0)
+        run: dotnet publish Jellyfin.Plugin.StreamLimit/Jellyfin.Plugin.StreamLimit.csproj -c Release -p:PluginTargetFramework=net10.0 -p:JellyfinVersion=12.0.0-rc2 -o publish/net10
+
+      - name: Package zips
+        run: |
+          mkdir -p release
+          zip -j "release/StreamLimit-${GITHUB_REF_NAME}.zip" publish/net9/Jellyfin.Plugin.StreamLimit.dll
+          zip -j "release/StreamLimit-${GITHUB_REF_NAME}-jellyfin12.zip" publish/net10/Jellyfin.Plugin.StreamLimit.dll
+          cd release
+          md5sum *.zip > checksums.md5
+          cat checksums.md5
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
         with:
-          patterns: |
+          files: |
             release/*.zip
-            release/*.tar.gz
+            release/checksums.md5
+          generate_release_notes: true

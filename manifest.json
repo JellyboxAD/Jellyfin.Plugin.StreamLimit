@@ -3,11 +3,27 @@
         "guid": "d98fbe02-daf3-4c09-a832-4b4e1d07326c",
         "name": "StreamLimiter",
         "overview": "Limits the number of simultaneous streams per user.",
-        "description": "A Jellyfin plugin that allows you to limit the number of simultaneous streams per user. Features include customizable messages and automatic session management.",
+        "description": "A Jellyfin plugin that allows you to limit the number of simultaneous streams per user. Features include a default limit, customizable messages, server-side transcode kill for clients that ignore stop commands, and optional device logout.",
         "owner": "JellyboxAD",
         "category": "Utilities",
         "imageUrl": "https://raw.githubusercontent.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/refs/heads/main/Readme-data/LOGO.png",
         "versions": [
+            {
+                "version": "1.1.1.0",
+                "changelog": "Jellyfin 12 build of v1.1.0.0 (same features — see the 1.1.0.0 entry). Servers pick the right build automatically: 10.11 installs 1.1.0.0, Jellyfin 12 installs 1.1.1.0.",
+                "targetAbi": "12.0.0.0",
+                "sourceUrl": "https://github.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/releases/download/v1.1.0.0/StreamLimit-v1.1.0.0-jellyfin12.zip",
+                "timestamp": "2026-07-17T00:00:00Z",
+                "checksum": "8092928F2FF8430A7DFBC23BD4032E00"
+            },
+            {
+                "version": "1.1.0.0",
+                "changelog": "- NEW (BETA): HTTP-level hard block — over-limit streams are rejected before any byte is served; works on every client (Swiftfin, Infuse, external players)\n- NEW (BETA): single clean custom message on web clients (replaces the built-in dialog)\n- NEW: default max streams for users without an explicit limit\n- NEW: config migration from pre-1.1 installs (normalizes legacy entries)\n- Fixed silent failure where one invalid config entry disabled every limit (#5/#8/#18)\n- Fixed device logout (a session id was passed where an access token was expected)\n- Kill transcode jobs of blocked streams; optional device logout\n- Admin-only stream limit API; removed Newtonsoft.Json\n- Fixed duplicated users in the config page dropdown (#16) and empty popup (#6)",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/releases/download/v1.1.0.0/StreamLimit-v1.1.0.0.zip",
+                "timestamp": "2026-07-17T00:00:00Z",
+                "checksum": "944155A23765AB197CE10BC3253D5BDC"
+            },
             {
                 "version": "1.0.0.2",
                 "changelog": "- Updated to 10.11 compatible version",

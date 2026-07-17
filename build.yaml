@@ -1,16 +1,32 @@
 name: "StreamLimit"
 guid: "d98fbe02-daf3-4c09-a832-4b4e1d07326c"
-version: "1.0.0.2"
+version: "1.1.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Stream Limiter"
 description: "Limit the number of streams a user can have."
 category: "General"
 owner: "JellyboxAD"
-timestamp: "2025-02-05T19:29:34Z"
+timestamp: "2026-07-17T00:00:00Z"
 artifacts:
   - "Jellyfin.Plugin.StreamLimit.dll"
 changelog: |-
+
+  ### [v1.1.0.0]
+  - NEW (BETA): HTTP-level hard block — media requests over the limit are rejected with 403 before any byte is served; works for every client including ones that ignore stop commands (Swiftfin, Infuse, external players)
+  - NEW (BETA): PlaybackInfo returns a proper "not allowed" playback error at the limit
+  - NEW (BETA): single clean custom message on web clients (replaces the built-in dialog)
+  - NEW: one-time config migration from pre-1.1 installs (normalizes legacy entries)
+  - Fixed silent failure where one invalid config entry disabled every limit (issues #5/#8/#18)
+  - Fixed device logout: a session id was passed where an access token was expected, so the advertised disconnect never worked
+  - New: kill server-side transcode jobs of blocked streams, so clients that ignore stop commands (Infuse, external players, Android TV) are stopped too
+  - New: optional device logout on limit (revokes the token, also cuts direct play)
+  - New: default max streams for users without an explicit limit
+  - Security: stream limit API now requires elevated (admin) permissions
+  - Replaced Newtonsoft.Json with System.Text.Json (no external dependency anymore)
+  - Fixed duplicated users in the configuration page dropdown (issue #16)
+  - Fixed empty limit-exceeded popup when no message was configured (issue #6)
+  - Builds for Jellyfin 10.11 (net9.0) and Jellyfin 12 (net10.0) from the same source
 
   ### [v1.0.0.2]
   - Updated to 10.11 compatible version

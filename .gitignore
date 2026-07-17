@@ -1,0 +1,6 @@
+bin/
+obj/
+release/
+*.user
+!*.sln.DotSettings.user
+.vs/

@@ -1,109 +1,150 @@
 using System;
+using System.Net.Mime;
+using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Library;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
 
-namespace Jellyfin.Plugin.StreamLimit.Api
+namespace Jellyfin.Plugin.StreamLimit.Api;
+
+/// <summary>
+/// Stream limit administration endpoints. Restricted to elevated users:
+/// otherwise any authenticated user could raise their own limit.
+/// </summary>
+[ApiController]
+[Authorize(Policy = Policies.RequiresElevation)]
+[Route("[controller]/[action]")]
+[Produces(MediaTypeNames.Application.Json)]
+public class StreamLimitController : ControllerBase
 {
-    using System.Collections.Generic;
-    using System.Net.Mime;
-    using MediaBrowser.Controller.Resolvers;
-    using Microsoft.AspNetCore.Authorization;
-    using Microsoft.AspNetCore.Mvc;
+    private readonly ILogger<StreamLimitController> _logger;
+    private readonly IUserManager _userManager;
+    private readonly StreamLimitManager _limitManager;
 
-    [ApiController]
-    [Authorize]
-    [Route("[controller]/[action]")]
-    [Produces(MediaTypeNames.Application.Json)]
-    public class StreamLimitController : ControllerBase
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StreamLimitController"/> class.
+    /// </summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
+    /// <param name="limitManager">The stream limit manager.</param>
+    public StreamLimitController(
+        ILogger<StreamLimitController> logger,
+        IUserManager userManager,
+        StreamLimitManager limitManager)
     {
-        private readonly ILogger<StreamLimitController> _logger;
-        private readonly IUserManager _userManager;
+        _logger = logger;
+        _userManager = userManager;
+        _limitManager = limitManager;
+    }
 
-        public StreamLimitController(ILogger<StreamLimitController> logger, IUserManager userManager)
+    /// <summary>
+    /// Gets the stream limit configured for a user.
+    /// </summary>
+    /// <param name="userId">The user id (with or without dashes).</param>
+    /// <returns>The explicit and effective limit for the user.</returns>
+    [HttpGet]
+    public IActionResult GetUserStreamLimit([FromQuery] string userId)
+    {
+        if (!Guid.TryParse(userId, out var userGuid))
         {
-            _logger = logger;
-            _userManager = userManager;
+            return BadRequest("Invalid user id");
         }
 
-        [HttpGet]
-        public IActionResult GetUserStreamLimit(string userId)
+        if (_userManager.GetUserById(userGuid) is null)
         {
-            try
-            {
-                var userById = _userManager.GetUserById(Guid.Parse(userId));
-                if (userById == null)
-                {
-                    return this.NotFound("User does not exist");
-                }
-
-                var userData = JsonConvert.DeserializeObject<Dictionary<string, int>>(Plugin.Instance.Configuration.UserStreamLimits);
-                if (userData != null)
-                {
-                    int streamsAllowed = userData[userId.Replace("-", string.Empty)];
-                    return Ok(new
-                    {
-                        userId = userId,
-                        streamsAllowed = streamsAllowed
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex.Message, ex);
-                return StatusCode(500, ex.Message);
-            }
-
-            return BadRequest();
+            return NotFound("User does not exist");
         }
 
-        [HttpPost]
-        public IActionResult SetUserStreamLimit(string userId, int streamsAllowed)
+        return Ok(new
         {
-            try
-            {
-                var userById = _userManager.GetUserById(Guid.Parse(userId));
-                if (userById == null)
-                {
-                    return this.NotFound("User does not exist");
-                }
+            userId = StreamLimitStore.NormalizeUserKey(userGuid),
+            streamsAllowed = _limitManager.GetEffectiveLimit(userGuid),
+            explicitLimit = _limitManager.GetExplicitLimit(userGuid),
+        });
+    }
 
-                var userData = JsonConvert.DeserializeObject<Dictionary<string, int>>(Plugin.Instance.Configuration.UserStreamLimits);
-                if (userData != null)
-                {
-                    userData[userId.Replace("-", string.Empty)] = streamsAllowed;
-                    Plugin.Instance.Configuration.UserStreamLimits = JsonConvert.SerializeObject(userData);
-                    Plugin.Instance.SaveConfiguration();
-                    return Ok("user's stream limit set");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex.Message, ex);
-                return StatusCode(500, ex.Message);
-            }
+    /// <summary>
+    /// Gets all explicit per-user limits and the default limit.
+    /// </summary>
+    /// <returns>The limit map.</returns>
+    [HttpGet]
+    public IActionResult GetAllStreamLimits()
+    {
+        return Ok(new
+        {
+            defaultMaxStreams = Plugin.Instance?.Configuration.DefaultMaxStreams ?? 0,
+            limits = _limitManager.GetAllLimits(),
+        });
+    }
 
-            return BadRequest();
+    /// <summary>
+    /// Sets the stream limit for a user. A value of 0 removes the explicit
+    /// limit so the default limit applies again.
+    /// </summary>
+    /// <param name="userId">The user id (with or without dashes).</param>
+    /// <param name="streamsAllowed">The maximum number of simultaneous streams, 0 to remove.</param>
+    /// <returns>Status of the operation.</returns>
+    [HttpPost]
+    public IActionResult SetUserStreamLimit([FromQuery] string userId, [FromQuery] int streamsAllowed)
+    {
+        if (!Guid.TryParse(userId, out var userGuid))
+        {
+            return BadRequest("Invalid user id");
         }
 
-        [HttpPost]
-        public IActionResult SetAlertMessage(string alertMessage, string title)
+        if (streamsAllowed < 0)
         {
-            try
-            {
-                Plugin.Instance.Configuration.MessageText = alertMessage;
-                //Plugin.Instance.Configuration.MessageTimeShowInSeconds = duration;
-                Plugin.Instance.Configuration.MessageTitle = title;
-                Plugin.Instance.SaveConfiguration();
-                return Ok("Message updated:" + title);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex.Message, ex);
-                return StatusCode(500, ex.Message);
-            }
+            return BadRequest("streamsAllowed must be 0 (unlimited) or a positive number");
+        }
 
-            return BadRequest();
+        if (_userManager.GetUserById(userGuid) is null)
+        {
+            return NotFound("User does not exist");
+        }
+
+        try
+        {
+            _limitManager.SetLimit(userGuid, streamsAllowed);
+            return Ok(new
+            {
+                userId = StreamLimitStore.NormalizeUserKey(userGuid),
+                streamsAllowed,
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to set stream limit for user {UserId}", userGuid);
+            return StatusCode(500, "Failed to save the stream limit");
+        }
+    }
+
+    /// <summary>
+    /// Sets the title and text of the message shown when a stream is blocked.
+    /// </summary>
+    /// <param name="alertMessage">The message text.</param>
+    /// <param name="title">The message title.</param>
+    /// <returns>Status of the operation.</returns>
+    [HttpPost]
+    public IActionResult SetAlertMessage([FromQuery] string alertMessage, [FromQuery] string title)
+    {
+        var plugin = Plugin.Instance;
+        if (plugin is null)
+        {
+            return StatusCode(500, "Plugin instance is not available");
+        }
+
+        try
+        {
+            plugin.Configuration.MessageText = alertMessage ?? string.Empty;
+            plugin.Configuration.MessageTitle = title ?? string.Empty;
+            plugin.SaveConfiguration();
+            return Ok(new { title, message = alertMessage });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to update alert message");
+            return StatusCode(500, "Failed to save the alert message");
         }
     }
 }
