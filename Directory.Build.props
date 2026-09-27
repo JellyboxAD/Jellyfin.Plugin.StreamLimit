@@ -1,7 +1,16 @@
 <Project>
+    <!-- The assembly version MUST equal the manifest "version" of each build: Jellyfin reports the
+         assembly version in GET /Plugins, and the web client builds /Plugins/{id}/{version}/Image
+         (and disable/uninstall URLs) from it. A mismatch makes them 404 (logo missing on Jellyfin 12
+         with v1.1.1.0, whose DLL said 1.1.0.0). Jellyfin 10.11 line = 1.1.0.x, Jellyfin 12 line = 1.1.1.x. -->
     <PropertyGroup>
-        <Version>1.1.0.0</Version>
-        <AssemblyVersion>1.1.0.0</AssemblyVersion>
-        <FileVersion>1.1.0.0</FileVersion>
+        <Version>1.1.0.1</Version>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(PluginTargetFramework)' == 'net10.0'">
+        <Version>1.1.1.1</Version>
+    </PropertyGroup>
+    <PropertyGroup>
+        <AssemblyVersion>$(Version)</AssemblyVersion>
+        <FileVersion>$(Version)</FileVersion>
     </PropertyGroup>
 </Project>

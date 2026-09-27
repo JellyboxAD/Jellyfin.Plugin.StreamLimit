@@ -21,9 +21,10 @@ public static class WebInjection
     public const string EndMarker = "<!-- END Jellyfin.Plugin.StreamLimit -->";
 
     /// <summary>
-    /// The script tag injected before the closing body tag.
+    /// The script tag injected before the closing body tag. Relative to index.html
+    /// ({BaseUrl}/web/), so it still resolves when the server has a BaseUrl set.
     /// </summary>
-    public const string ScriptTag = "<script defer src=\"/StreamLimit/inject.js\"></script>";
+    public const string ScriptTag = "<script defer src=\"../StreamLimit/inject.js\"></script>";
 
     /// <summary>
     /// Removes any previously injected block from the html.

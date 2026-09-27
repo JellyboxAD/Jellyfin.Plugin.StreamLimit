@@ -1,6 +1,6 @@
 name: "StreamLimit"
 guid: "d98fbe02-daf3-4c09-a832-4b4e1d07326c"
-version: "1.1.0.0"
+version: "1.1.0.1"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Stream Limiter"
@@ -11,6 +11,14 @@ timestamp: "2026-07-17T00:00:00Z"
 artifacts:
   - "Jellyfin.Plugin.StreamLimit.dll"
 changelog: |-
+
+  ### [v1.1.0.1]
+  - Fixed plugin failing to load on Jellyfin 10.11.0-10.11.10 ("incompatible version of one of the shared libraries", issue #19): now built against Jellyfin 10.11.0 instead of the latest 10.11.x
+  - Jellyfin 12 build now targets the final 12.0.0 packages instead of 12.0.0-rc2
+  - Fixed missing plugin logo (and 404 on disable/uninstall) on Jellyfin 12: the Jellyfin 12 DLL reported version 1.1.0.0 instead of its package version; each build now carries its own version (10.11 = 1.1.0.x, Jellyfin 12 = 1.1.1.x)
+  - Fixed a crashed client's ghost session getting the user's new, legitimate stream stopped (up to ~10 min lockout): the PlaybackStart limiter now uses the same fresh-check-in, per-device count as the HTTP gate
+  - Transcode kill no longer falls back to killing every job of the device when the client sent no PlaySessionId
+  - Custom web message now works on servers with a BaseUrl (the injected script used an absolute /StreamLimit path)
 
   ### [v1.1.0.0]
   - NEW (BETA): HTTP-level hard block — media requests over the limit are rejected with 403 before any byte is served; works for every client including ones that ignore stop commands (Swiftfin, Infuse, external players)

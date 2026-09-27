@@ -30,7 +30,7 @@ namespace Jellyfin.Plugin.StreamLimit.Gate;
 /// </summary>
 /// <remarks>
 /// This is the enforcement layer that works for every client, including ones that
-/// ignore remote stop commands (Swiftfin, Infuse, external players): a stream that
+/// ignore remote stop commands (Infuse, external players, Streamyfin in background): a stream that
 /// is never served cannot be played. The filter fails open — requests whose user
 /// cannot be identified are never blocked.
 /// </remarks>
@@ -288,23 +288,9 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
         }
     }
 
+    // Devices with live HTTP traffic are covered by the tracker regardless.
     private IReadOnlyCollection<string> GetPlayingDeviceIds(Guid userId)
-    {
-        // Only sessions with a recent playback check-in count: a crashed client's
-        // session keeps NowPlayingItem set until Jellyfin's 5-10 minute reaper runs,
-        // and must not lock the user out that long. Devices with live HTTP traffic
-        // are covered by the tracker regardless.
-        var staleBefore = DateTime.UtcNow.AddMinutes(-3);
-        return _sessionManager.Sessions
-            .Where(s => s.UserId.Equals(userId)
-                        && s.NowPlayingItem is not null
-                        && s.IsActive
-                        && s.LastPlaybackCheckIn >= staleBefore
-                        && !string.IsNullOrEmpty(s.DeviceId))
-            .Select(s => s.DeviceId)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
+        => PlayingSessions.GetPlayingDeviceIds(_sessionManager.Sessions, userId, DateTime.UtcNow);
 
     private static string GetDenialMessage()
         => Plugin.Instance?.Configuration.ResolvedMessageText ?? PluginConfiguration.DefaultMessageText;

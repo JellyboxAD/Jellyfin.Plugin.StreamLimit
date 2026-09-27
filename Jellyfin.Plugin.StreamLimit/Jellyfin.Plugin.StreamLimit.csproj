@@ -1,11 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Default target: current stable Jellyfin line. For a Jellyfin 12 build use:
-         dotnet build -c Release -p:PluginTargetFramework=net10.0 -p:JellyfinVersion=12.0.0-rc2 -->
+    <!-- Default target: Jellyfin 10.11 line. For a Jellyfin 12 build use:
+         dotnet build -c Release -p:PluginTargetFramework=net10.0 -p:JellyfinVersion=12.0.0
+         JellyfinVersion MUST be the first release of the line (x.y.0), never a floating 10.11.*:
+         the DLL references the exact Jellyfin assembly versions it was compiled against, and older
+         servers of the same line refuse to load it (issue #19: built against 10.11.11, failed on 10.11.8). -->
     <PluginTargetFramework Condition="'$(PluginTargetFramework)' == ''">net9.0</PluginTargetFramework>
     <TargetFramework>$(PluginTargetFramework)</TargetFramework>
-    <JellyfinVersion Condition="'$(JellyfinVersion)' == ''">10.11.*</JellyfinVersion>
+    <JellyfinVersion Condition="'$(JellyfinVersion)' == ''">10.11.0</JellyfinVersion>
     <RootNamespace>Jellyfin.Plugin.StreamLimit</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Nullable>enable</Nullable>

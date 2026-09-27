@@ -22,7 +22,7 @@ public enum GateKind
 /// Maps Jellyfin API controller actions to their gate treatment.
 /// </summary>
 /// <remarks>
-/// The action list was verified identical between Jellyfin 10.11.0 and 12.0-rc2:
+/// The action list was verified identical across Jellyfin 10.11.0, 12.0, 12.1 and 13.0-dev (master, 2026-09):
 /// no playback endpoint was added, removed or renamed. Matching by controller and
 /// action name (from <c>ControllerActionDescriptor</c>) is therefore stable and,
 /// unlike path matching, immune to base-url prefixes and route casing. Several of

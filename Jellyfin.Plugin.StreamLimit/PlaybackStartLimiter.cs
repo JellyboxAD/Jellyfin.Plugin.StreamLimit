@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Queries;
 using Jellyfin.Plugin.StreamLimit.Configuration;
+using Jellyfin.Plugin.StreamLimit.Gate;
 using MediaBrowser.Controller.Devices;
 using MediaBrowser.Controller.Events;
 using MediaBrowser.Controller.Library;
@@ -92,10 +94,14 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
         await userLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            var activeStreamsForUser = _sessionManager.Sessions.Count(s =>
-                s.UserId.Equals(userId)
-                && s.NowPlayingItem is not null
-                && s.IsActive);
+            // Same definition as the HTTP gate: distinct devices with a recent playback
+            // check-in, so a crashed client's ghost session cannot get the user's new,
+            // legitimate stream killed. The starting session always counts. Trade-off: a
+            // client that stops reporting progress for 3+ minutes is no longer counted here;
+            // the HTTP gate (traffic-based) still covers it when the hard block is on.
+            var playingStreams = PlayingSessions.GetPlayingStreamKeys(_sessionManager.Sessions, userId, DateTime.UtcNow);
+            playingStreams.Add(PlayingSessions.StreamKey(session));
+            var activeStreamsForUser = playingStreams.Count;
 
             _logger.LogInformation(
                 "[{TaskNumber}] Playback started. User: {UserId}, active streams: {ActiveStreams}, limit: {MaxStreams}",
@@ -172,7 +178,9 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
             return;
         }
 
-        if (string.IsNullOrEmpty(session.DeviceId))
+        // Without a PlaySessionId, Jellyfin kills every transcode job of the device,
+        // which could take down an unrelated, legitimate stream sharing that device id.
+        if (string.IsNullOrEmpty(session.DeviceId) || string.IsNullOrEmpty(eventArgs.PlaySessionId))
         {
             return;
         }

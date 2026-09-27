@@ -14,21 +14,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
-      - name: Run tests
-        run: dotnet test tests/Jellyfin.Plugin.StreamLimit.Tests/Jellyfin.Plugin.StreamLimit.Tests.csproj -c Release
+      - name: Run tests (Jellyfin 10.11 build)
+        run: dotnet test tests/Jellyfin.Plugin.StreamLimit.Tests/Jellyfin.Plugin.StreamLimit.Tests.csproj -c Release -p:JellyfinVersion=10.11.0
+
+      - name: Run tests (Jellyfin 12 build)
+        run: dotnet test tests/Jellyfin.Plugin.StreamLimit.Tests/Jellyfin.Plugin.StreamLimit.Tests.csproj -c Release -p:PluginTargetFramework=net10.0 -p:JellyfinVersion=12.0.0
 
       - name: Build for Jellyfin 10.11 (net9.0)
-        run: dotnet publish Jellyfin.Plugin.StreamLimit/Jellyfin.Plugin.StreamLimit.csproj -c Release -o publish/net9
+        run: dotnet publish Jellyfin.Plugin.StreamLimit/Jellyfin.Plugin.StreamLimit.csproj -c Release -p:JellyfinVersion=10.11.0 -o publish/net9
 
       - name: Build for Jellyfin 12 (net10.0)
-        run: dotnet publish Jellyfin.Plugin.StreamLimit/Jellyfin.Plugin.StreamLimit.csproj -c Release -p:PluginTargetFramework=net10.0 -p:JellyfinVersion=12.0.0-rc2 -o publish/net10
+        run: dotnet publish Jellyfin.Plugin.StreamLimit/Jellyfin.Plugin.StreamLimit.csproj -c Release -p:PluginTargetFramework=net10.0 -p:JellyfinVersion=12.0.0 -o publish/net10
 
       - name: Package zips
         run: |
@@ -40,9 +43,22 @@ jobs:
           cat checksums.md5
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             release/*.zip
             release/checksums.md5
           generate_release_notes: true
+
+      # Servers install from manifest.json on main: add the two new versions with the
+      # checksums of the zips built above, so publishing a release is a single tag push.
+      - name: Publish new versions to manifest.json
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+          python3 .github/scripts/update_manifest.py "${GITHUB_REF_NAME}" release
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "chore: publish ${GITHUB_REF_NAME} in manifest.json"
+          git push origin main

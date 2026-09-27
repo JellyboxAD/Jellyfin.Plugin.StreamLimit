@@ -1,87 +1,117 @@
 # Jellyfin Stream Limiter Plugin
 
-A Jellyfin plugin that limits the number of simultaneous streams per user.
+![Stream Limiter](Readme-data/LOGO.png)
 
-Compatible with **Jellyfin 10.11** (default build, `net9.0`) and **Jellyfin 12** (`net10.0` build), from the same source.
+Limit the number of simultaneous streams per user on your Jellyfin server — with a hard block that works on **every** client.
 
-## Manifest URL
+## Compatibility
 
-One manifest for every server version (Dashboard > Plugins > Repositories):
+| Jellyfin server | Plugin version | Build |
+|---|---|---|
+| **10.11.0 → 10.11.x** | `1.1.0.x` | `net9.0` |
+| **12.0 / 12.1** | `1.1.1.x` | `net10.0` |
 
-```
-https://raw.githubusercontent.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/main/manifest.json
-```
+One manifest serves both: your server installs the right build automatically. Same features on both lines.
 
-Your server picks the right build automatically: Jellyfin **10.11** installs `1.1.0.0` (net9), Jellyfin **12** installs `1.1.1.0` (net10) — same features, one build per server generation.
+> ⚠️ **BETA** — the HTTP-level hard block and the custom web message (v1.1+) ship enabled by default. Each can be turned off in the settings to fall back to the classic behaviour.
 
-> ⚠️ **BETA** — the HTTP-level hard block and the custom web message introduced in v1.1.x are new. They ship enabled by default and can each be turned off in the plugin settings to fall back to the classic behaviour.
+## Installation
+
+1. **Dashboard → Plugins → Repositories → +**, and add:
+   ```
+   https://raw.githubusercontent.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/main/manifest.json
+   ```
+2. **Catalog → Stream Limiter → Install**, then restart Jellyfin.
+3. **Dashboard → My Plugins → Stream Limiter** to set your limits.
+
+Installing from the repository is recommended: you get automatic updates and the plugin logo. A manual install (zip from the [releases](../../releases) extracted into the server's `plugins` folder) works too, but has no logo and no auto-update.
 
 ## Features
 
-- 🎮 Per-user stream limits, plus a default limit for everyone else
-- 🚧 **Hard block at the HTTP level** *(BETA)*: media requests over the limit are rejected with `403` before a single byte is served — works for **every** client (Swiftfin, Infuse, external players, custom apps), because a stream that is never served cannot be played. `PlaybackInfo` is answered with a proper "playback not allowed" error so clients show a clean dialog.
-- 💬 **Custom block message on web clients** *(BETA)*: the plugin injects a small script into the web client so a blocked stream shows **one clean popup with your own title/text** instead of the built-in generic dialog — works in every language. Web clients only; native apps keep their own error screen (no plugin can change their UI).
-- 🛑 Layered reactive enforcement as a safety net:
-  1. Stop playstate command (well-behaved clients)
-  2. Server-side transcode kill (clients that ignore commands)
-  3. Optional device logout (revokes the token, also cuts direct play)
-- 🔁 Automatic one-time migration of pre-1.1 configurations (legacy entries normalized, corrupted entries dropped)
-- 🔒 Admin-only management API
+- 🎮 **Per-user limits**, plus a **default limit** for everyone else
+- 🚧 **Hard block at the HTTP level** *(BETA)*: media requests over the limit get `403` before a single byte is served. A stream that is never served cannot be played, whatever the client (native apps, Infuse, external players, custom apps).
+- 🙅 **Clean refusal at setup** *(BETA)*: `PlaybackInfo` answers "playback not allowed", so clients fail before loading instead of spinning
+- 💬 **Your own message on web clients** *(BETA)*: one popup with your title/text instead of the generic dialog, in every language
+- 🛑 **Reactive safety net**: stop command → server-side transcode kill → optional device logout
+- 👻 **No ghost lockouts**: a crashed client that stopped reporting playback frees its slot after 3 minutes
+- 🔁 **Automatic migration** of pre-1.1 configurations
+- 🔒 **Admin-only management API**
 
 ## Example
 
 ![Example](Readme-data/Example.gif)
 
-## Installation
-
-1. Add the manifest URL above as a plugin repository (Dashboard > Plugins > Repositories), or download the zip from the releases and extract it into your server's `plugins` folder
-2. Restart Jellyfin
-3. Configure the plugin in Dashboard > My Plugins > Stream Limiter
-
 ## Configuration
 
 ![Plugin Configuration](Readme-data/Config.png)
 
-The settings page has three sections. Defaults are safe: install, set a limit, done.
+Defaults are safe: install, set a limit, done.
 
 **Stream limits**
-- **Per-user limit**: select a user and set their max simultaneous streams. Empty or 0 removes the entry (the default applies). A paused stream still counts as active.
-- **Default limit**: applied to every user without an explicit limit. 0 = unlimited.
+- **Per-user limit**: pick a user and set their max simultaneous streams. Empty or `0` removes the entry (the default applies).
+- **Default limit**: applies to every user without an explicit limit. `0` = unlimited.
+- A paused stream still counts as active.
 
 **Enforcement**
-- **Hard block at the HTTP level** *(BETA, on)*: rejects over-limit media requests before any byte is served — works on every client. Turn off to fall back to the classic stop-command behaviour only.
-- **Refuse playback negotiation** *(BETA, on)*: denies the stream during setup (`PlaybackInfo`) so clients fail cleanly before loading. Requires the hard block.
-- **Kill transcode jobs** *(on)*: stops the server-side ffmpeg job of a blocked stream — safety net for clients that ignore stop commands.
-- **Log out the offending device** *(off)*: revokes the device token. Most aggressive option — also cuts direct-play, but the user must sign in again on that device.
-- **Strict mode** *(BETA, off)*: also rejects media requests whose user cannot be identified (no usable token). By default those are let through (fail-open) to avoid breaking exotic clients.
+
+| Option | Default | What it does |
+|---|---|---|
+| Hard block at the HTTP level *(BETA)* | on | Rejects over-limit media requests before any byte is served. Off = classic stop-command behaviour only. |
+| Refuse playback negotiation *(BETA)* | on | Denies the stream during setup (`PlaybackInfo`). Requires the hard block. |
+| Kill transcode jobs | on | Stops the server-side ffmpeg job of a blocked stream. |
+| Log out the offending device | off | Revokes the device token. Most aggressive: the user must sign in again on that device. |
+| Strict mode *(BETA)* | off | Also rejects media requests whose user cannot be identified. Off = those are let through (fail-open). |
 
 **Blocked message**
 - **Title / Text**: your wording, shown when a stream is blocked.
-- **Show my message on web clients** *(BETA, on)*: replaces the web client's built-in "not allowed" dialog with a single popup carrying your title/text. Web clients only (browser, Android webview, iOS web); a browser refresh is needed after changing it. Falls back silently to the native dialog if the web files cannot be written (e.g. read-only Docker mounts).
+- **Show my message on web clients** *(BETA, on)*: replaces the web client's "not allowed" dialog with your popup (browser, Android app, iOS app). Turning it on/off needs a **server restart**; title/text changes only need a browser refresh.
 - **Also push a server message** *(off, advanced)*: sends a Jellyfin `DisplayMessage` command. Only some native apps show it, and it adds a second popup on web clients.
 
-> **Upgrading from 1.0.x?** Nothing to do: on first start the plugin migrates your existing configuration (legacy dashed user ids and corrupted entries are cleaned automatically).
+> **Upgrading from 1.0.x?** Nothing to do: on first start the plugin migrates your configuration (legacy dashed user ids and corrupted entries are cleaned automatically).
+
+## Client behaviour
+
+Every client is blocked by the hard block. What the user *sees* depends on the app — no server plugin can change a native app's UI.
+
+| Client | What the user sees when blocked |
+|---|---|
+| Jellyfin Web (browser) | Your custom popup |
+| Jellyfin Android / iOS apps | Your custom popup (web UI); the native Android player may show an empty player |
+| Swiftfin | Generic "Unable to load this item" error |
+| Streamyfin | "Failed to get the stream URL", or an endless loader with the mpv engine |
+| AFinity | Playback stalls without a message |
+| Infuse / external players | Their own playback error |
+
+Downloaded/offline items play from the device and cannot be blocked by the server.
 
 ## How it works
 
-**Hard block (primary, default on, BETA).** The plugin installs a global request filter inside the Jellyfin server. Every media request (progressive `stream`, HLS playlists and segments, universal audio, Live TV, `/Items/{id}/File` and `/Download`) is matched to a playback *slot* per user and device:
+**Hard block.** A global request filter inside the Jellyfin server matches every media request (progressive `stream`, HLS playlists and segments, universal audio, Live TV, `/Items/{id}/File` and `/Download`) to a playback *slot* per user and device:
 
 - a device already streaming keeps its slot (item switches, quality changes and seeks are not new streams);
-- a new device beyond the limit gets **`403` — no media bytes are ever served**, so it cannot play no matter what client it is; blocked responses carry an `X-StreamLimit: 1` header;
-- `PlaybackInfo` returns `ErrorCode: NotAllowed` at the limit, so clients show a proper error dialog instead of a spinner;
-- slots free up when the client reports a stop, when its session ends, when its HTTP response ends, or after 60 s without traffic (abandoned slots are evicted early when another device is about to be denied);
-- theme songs and video backdrops played while browsing never hold a slot;
-- requests that cannot be attributed to a user (API keys, anonymous) are **never blocked** (fail-open, unless strict mode is on).
+- a new device beyond the limit gets **`403`**, with an `X-StreamLimit: 1` header — no media bytes are ever served;
+- `PlaybackInfo` returns `ErrorCode: NotAllowed` at the limit;
+- slots free up when the client reports a stop, when its session ends, or after 60 s without traffic; a session that stopped checking in for 3 minutes no longer counts;
+- theme songs and backdrop videos played while browsing never hold a slot;
+- requests that cannot be attributed to a user (API keys, anonymous) are never blocked, unless strict mode is on.
 
-**Web message (BETA).** At startup the plugin adds a `<script>` tag to the web client's `index.html` (idempotent, reapplied after every server/web update) pointing at `/StreamLimit/inject.js`. That script detects a block (`X-StreamLimit` header or `PlaybackInfo` error), shows one popup with your configured title/text, and suppresses the client's own error dialogs — matching their structure, not their wording, so it works in every language. If the web folder is not writable, the plugin logs a warning and the client simply shows its built-in dialog: the block itself is never affected.
+**Web message.** At startup the plugin adds a `<script>` tag to the web client's `index.html` (idempotent, reapplied after every server/web update, compatible with a server BaseUrl). The script detects a block (`X-StreamLimit` header or `PlaybackInfo` error), shows one popup with your title/text and hides the client's own error dialog. If the web folder is not writable, the client simply shows its built-in dialog — the block itself is never affected.
 
-**Reactive safety net.** When a playback report still slips over the limit, the plugin stops the newest stream: stop command → transcode kill → optional server message → optional device logout. Paused streams count as active: they hold a playback slot.
+**Reactive safety net.** When a playback start still goes over the limit, the plugin stops the newest stream: stop command → transcode kill → optional server message → optional device logout. It counts one stream per device, and only sessions that reported playback in the last 3 minutes, so a crashed client can't get your new stream killed.
 
-**Native clients.** Swiftfin, AFinity, Streamyfin, Infuse and other native apps are fully blocked, but they display their own generic error screen — no server plugin can change or hide a native client's UI. Custom wording is only possible on web clients.
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| Plugin disabled, log says *"references an incompatible version of one of the shared libraries"* | Fixed in `1.1.0.1` (issue #19): update the plugin and restart. |
+| Plugin logo missing on Jellyfin 12, disable/uninstall buttons fail | Fixed in `1.1.1.1`: update the plugin and restart. |
+| No logo after a manual install | Expected: Jellyfin only downloads the logo when installing from the repository. |
+| Custom web message not shown | Check the log for a write warning on `index.html` (read-only web folder, e.g. some Docker setups). Restart the server after toggling the option, then refresh the browser. |
+| Limit not applied | Check the user's effective limit with `GET /StreamLimit/GetUserStreamLimit?userId=<id>` and the server log (entries from `Jellyfin.Plugin.StreamLimit`). |
 
 ## API
 
-Management endpoints require **elevated (admin) permissions**:
+Management endpoints require **admin** permissions:
 
 ```http
 GET  /StreamLimit/GetUserStreamLimit?userId=<id>
@@ -94,7 +124,7 @@ POST /StreamLimit/SetAlertMessage?alertMessage=<text>&title=<title>
      → updates the blocked-message wording
 ```
 
-One endpoint is anonymous by design (it is loaded by the web client before login and contains no secrets):
+One endpoint is anonymous by design (loaded by the web client before login, contains no secrets):
 
 ```http
 GET  /StreamLimit/inject.js    → the web-message client script
@@ -102,21 +132,33 @@ GET  /StreamLimit/inject.js    → the web-message client script
 
 User ids are accepted with or without dashes. Swagger UI: `http://your-server/api-docs/swagger` (StreamLimit section).
 
-## Building
+## Development
 
 ```bash
-# Jellyfin 10.11 (default)
+# Jellyfin 10.11 build
 dotnet publish Jellyfin.Plugin.StreamLimit/Jellyfin.Plugin.StreamLimit.csproj -c Release -o publish/net9
 
-# Jellyfin 12
+# Jellyfin 12 build
 dotnet publish Jellyfin.Plugin.StreamLimit/Jellyfin.Plugin.StreamLimit.csproj -c Release \
-  -p:PluginTargetFramework=net10.0 -p:JellyfinVersion=12.0.0-rc2 -o publish/net10
+  -p:PluginTargetFramework=net10.0 -p:JellyfinVersion=12.0.0 -o publish/net10
 
-# Tests
+# Tests (add the same -p: flags to test the Jellyfin 12 build)
 dotnet test tests/Jellyfin.Plugin.StreamLimit.Tests/Jellyfin.Plugin.StreamLimit.Tests.csproj
 ```
 
-The plugin has no external dependencies (System.Text.Json only), so the release zip contains a single DLL.
+The plugin has no external dependencies, so each release zip contains a single DLL.
+
+Two rules keep every server able to load the plugin (both are checked by tests):
+
+- **Build against the first release of a Jellyfin line** (`10.11.0`, `12.0.0`), never a floating `10.11.*`. The DLL records the Jellyfin versions it was compiled against, and an older server refuses a plugin that asks for a newer version (issue #19).
+- **The DLL version must match the manifest version** of its build (`1.1.0.x` for 10.11, `1.1.1.x` for Jellyfin 12, both set in `Directory.Build.props`). Jellyfin uses it to build the logo and plugin-management URLs.
+
+### Releasing
+
+1. Bump both versions in `Directory.Build.props` and add a `### [vX.Y.Z.W]` section at the top of the changelog in `build.yaml`.
+2. Commit, then push a tag: `git tag v1.1.0.2 && git push origin main v1.1.0.2`.
+
+The release workflow then runs the tests on both builds, builds both zips, creates the GitHub release and adds the two new versions (with their checksums) to `manifest.json` on `main`.
 
 ## Contributing
 
@@ -128,11 +170,8 @@ The plugin has no external dependencies (System.Text.Json only), so the release 
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
 ## Support
 
-For questions or issues:
-1. Check the [Issues](../../issues)
-2. Create a new issue if needed
-3. Join the Jellyfin community
+Check the [issues](../../issues) or open a new one.
