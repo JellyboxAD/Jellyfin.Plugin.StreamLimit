@@ -10,7 +10,7 @@
         "versions": [
             {
                 "version": "1.1.1.1",
-                "changelog": "Jellyfin 12 build of v1.1.0.1 (same changes).\n- Fixed plugin failing to load on Jellyfin 10.11.0-10.11.10 (\"incompatible version of one of the shared libraries\", issue #19): now built against Jellyfin 10.11.0 instead of the latest 10.11.x\n- Jellyfin 12 build now targets the final 12.0.0 packages instead of 12.0.0-rc2\n- Fixed missing plugin logo (and 404 on disable/uninstall) on Jellyfin 12: the Jellyfin 12 DLL reported version 1.1.0.0 instead of its package version; each build now carries its own version (10.11 = 1.1.0.x, Jellyfin 12 = 1.1.1.x)\n- Fixed a crashed client's ghost session getting the user's new, legitimate stream stopped (up to ~10 min lockout): the PlaybackStart limiter now uses the same fresh-check-in, per-device count as the HTTP gate\n- Transcode kill no longer falls back to killing every job of the device when the client sent no PlaySessionId\n- Custom web message now works on servers with a BaseUrl (the injected script used an absolute /StreamLimit path)",
+                "changelog": "Jellyfin 12 build of v1.1.0.1 (same changes — see the 1.1.0.1 entry). Servers pick the right build automatically: 10.11 installs 1.1.0.1, Jellyfin 12 installs 1.1.1.1.",
                 "targetAbi": "12.0.0.0",
                 "sourceUrl": "https://github.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/releases/download/v1.1.0.1/StreamLimit-v1.1.0.1-jellyfin12.zip",
                 "timestamp": "2026-09-27T23:42:10Z",

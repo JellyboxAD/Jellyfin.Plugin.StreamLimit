@@ -68,7 +68,8 @@ def main():
     })
     upsert(package["versions"], {
         "version": jf12,
-        "changelog": f"Jellyfin 12 build of v{default} (same changes).\n{changelog}",
+        "changelog": (f"Jellyfin 12 build of v{default} (same changes — see the {default} entry). "
+                      f"Servers pick the right build automatically: 10.11 installs {default}, Jellyfin 12 installs {jf12}."),
         "targetAbi": "12.0.0.0",
         "sourceUrl": f"{base_url}/{zip12}",
         "timestamp": timestamp,
