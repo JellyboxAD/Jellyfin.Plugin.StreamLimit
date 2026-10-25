@@ -1,0 +1,53 @@
+name: Update release notes
+
+# Hand-written release descriptions live in .github/release-notes/<tag>.md.
+# Pushing one (new or edited) updates the description of that GitHub release;
+# the release workflow also uses it when the tag is pushed after the notes.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/release-notes/**"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to update (e.g. v1.1.0.2)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    name: Update release description
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Apply release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ -n "${INPUT_TAG}" ]; then
+            files=".github/release-notes/${INPUT_TAG}.md"
+          else
+            files=$(git diff --name-only --diff-filter=AM HEAD~1 HEAD -- .github/release-notes/)
+          fi
+          for f in $files; do
+            tag=$(basename "$f" .md)
+            if [ ! -f "$f" ]; then
+              echo "::error::$f not found"; exit 1
+            fi
+            if gh release view "$tag" > /dev/null 2>&1; then
+              gh release edit "$tag" --notes-file "$f"
+              echo "Updated the description of release $tag"
+            else
+              echo "No release $tag yet: the release workflow will use $f when the tag is pushed"
+            fi
+          done

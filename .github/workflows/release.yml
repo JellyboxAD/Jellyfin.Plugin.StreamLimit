@@ -44,8 +44,15 @@ jobs:
           md5sum *.zip > checksums.md5
           cat checksums.md5
 
+      # Hand-written notes (.github/release-notes/<tag>.md) win; otherwise they are
+      # generated from the build.yaml changelog.
       - name: Write release notes
-        run: python3 .github/scripts/release_notes.py "${GITHUB_REF_NAME}" release/notes.md
+        run: |
+          if [ -f ".github/release-notes/${GITHUB_REF_NAME}.md" ]; then
+            cp ".github/release-notes/${GITHUB_REF_NAME}.md" release/notes.md
+          else
+            python3 .github/scripts/release_notes.py "${GITHUB_REF_NAME}" release/notes.md
+          fi
 
       - name: Create release
         uses: softprops/action-gh-release@v3

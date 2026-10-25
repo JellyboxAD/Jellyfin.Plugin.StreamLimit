@@ -213,9 +213,10 @@ Two rules keep every server able to load the plugin (both are checked by tests):
 ### Releasing
 
 1. Bump both versions in `Directory.Build.props` and add a `### [vX.Y.Z.W]` section at the top of the changelog in `build.yaml`.
-2. Commit, then push a tag: `git tag v1.1.0.2 && git push origin main v1.1.0.2`.
+2. Optional: write the GitHub release description in `.github/release-notes/vX.Y.Z.W.md` (otherwise it is generated from the changelog).
+3. Commit, then push a tag: `git tag v1.1.0.2 && git push origin main v1.1.0.2`.
 
-The release workflow then runs the tests on both builds, builds both zips, creates the GitHub release and adds the two new versions (with their checksums) to `manifest.json` on `main`.
+The release workflow then runs the tests on both builds, builds both zips, creates the GitHub release and adds the two new versions (with their checksums) to `manifest.json` on `main`. Editing a file in `.github/release-notes/` later and pushing it updates that release's description.
 
 ## Contributing
 
