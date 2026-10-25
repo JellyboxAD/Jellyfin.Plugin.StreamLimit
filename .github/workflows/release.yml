@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # tags, for the "Full changelog" link of the release notes
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
@@ -42,13 +44,17 @@ jobs:
           md5sum *.zip > checksums.md5
           cat checksums.md5
 
+      - name: Write release notes
+        run: python3 .github/scripts/release_notes.py "${GITHUB_REF_NAME}" release/notes.md
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
+          name: ${{ github.ref_name }}
+          body_path: release/notes.md
           files: |
             release/*.zip
             release/checksums.md5
-          generate_release_notes: true
 
       # Servers install from manifest.json on main: add the two new versions with the
       # checksums of the zips built above, so publishing a release is a single tag push.

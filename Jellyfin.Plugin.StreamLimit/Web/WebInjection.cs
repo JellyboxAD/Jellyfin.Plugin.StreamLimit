@@ -4,7 +4,9 @@ namespace Jellyfin.Plugin.StreamLimit.Web;
 
 /// <summary>
 /// Pure, testable helpers to add or remove the plugin's script tag inside the
-/// Jellyfin web client's index.html. Kept side-effect free so it can be unit tested
+/// Jellyfin web client's index.html (served on the fly by
+/// <see cref="WebInjectionStartupFilter"/>; removed from the file on disk, where
+/// versions up to 1.1.0.1 wrote it). Kept side-effect free so it can be unit tested
 /// without touching the filesystem.
 /// </summary>
 public static class WebInjection
@@ -21,10 +23,26 @@ public static class WebInjection
     public const string EndMarker = "<!-- END Jellyfin.Plugin.StreamLimit -->";
 
     /// <summary>
-    /// The script tag injected before the closing body tag. Relative to index.html
-    /// ({BaseUrl}/web/), so it still resolves when the server has a BaseUrl set.
+    /// The script URL, relative to index.html ({BaseUrl}/web/), so it still resolves when
+    /// the server has a BaseUrl set.
     /// </summary>
-    public const string ScriptTag = "<script defer src=\"../StreamLimit/inject.js\"></script>";
+    public const string ScriptSrc = "../StreamLimit/inject.js";
+
+    /// <summary>
+    /// The script tag injected before the closing body tag. The URL carries the plugin
+    /// version, so a plugin update never runs against a cached older script.
+    /// </summary>
+    public static readonly string ScriptTag = BuildScriptTag(typeof(WebInjection).Assembly.GetName().Version);
+
+    /// <summary>
+    /// Builds the script tag for a plugin version.
+    /// </summary>
+    /// <param name="version">The plugin version; omitted from the URL when null.</param>
+    /// <returns>The script tag.</returns>
+    public static string BuildScriptTag(Version? version)
+        => version is null
+            ? "<script defer src=\"" + ScriptSrc + "\"></script>"
+            : "<script defer src=\"" + ScriptSrc + "?v=" + version + "\"></script>";
 
     /// <summary>
     /// Removes any previously injected block from the html.
@@ -98,4 +116,26 @@ public static class WebInjection
     /// <returns>True when the block is present.</returns>
     public static bool IsInjected(string html)
         => !string.IsNullOrEmpty(html) && html.Contains(BeginMarker, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether a request path is the web client's index page: <c>{BaseUrl}/web</c>,
+    /// <c>{BaseUrl}/web/</c> or <c>{BaseUrl}/web/index.html</c>, case-insensitive.
+    /// </summary>
+    /// <param name="path">The full request path (base path included).</param>
+    /// <param name="baseUrl">The server's BaseUrl (network configuration); empty when none.</param>
+    /// <returns>True for the index page.</returns>
+    public static bool IsIndexRequest(string? path, string? baseUrl)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return false;
+        }
+
+        var prefix = baseUrl?.Trim().Trim('/') ?? string.Empty;
+        prefix = prefix.Length == 0 ? "/web" : "/" + prefix + "/web";
+
+        return path.Equals(prefix, StringComparison.OrdinalIgnoreCase)
+               || path.Equals(prefix + "/", StringComparison.OrdinalIgnoreCase)
+               || path.Equals(prefix + "/index.html", StringComparison.OrdinalIgnoreCase);
+    }
 }

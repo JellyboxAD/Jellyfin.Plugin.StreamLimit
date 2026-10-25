@@ -5,10 +5,16 @@
          dotnet build -c Release -p:PluginTargetFramework=net10.0 -p:JellyfinVersion=12.0.0
          JellyfinVersion MUST be the first release of the line (x.y.0), never a floating 10.11.*:
          the DLL references the exact Jellyfin assembly versions it was compiled against, and older
-         servers of the same line refuse to load it (issue #19: built against 10.11.11, failed on 10.11.8). -->
+         servers of the same line refuse to load it (issue #19: built against 10.11.11, failed on 10.11.8).
+         Jellyfin 12 build: 12.0.0 exactly — every 12.x minor bumps the assembly version, so a build
+         against 12.3.0 would fail to load on 12.0-12.2. Checked by AbiCompatibilityTests. -->
     <PluginTargetFramework Condition="'$(PluginTargetFramework)' == ''">net9.0</PluginTargetFramework>
     <TargetFramework>$(PluginTargetFramework)</TargetFramework>
     <JellyfinVersion Condition="'$(JellyfinVersion)' == ''">10.11.0</JellyfinVersion>
+    <!-- First server release each build must load on = the manifest targetAbi of the build
+         (.github/scripts/update_manifest.py). JellyfinVersion must be exactly this release. -->
+    <JellyfinTargetAbi Condition="'$(PluginTargetFramework)' == 'net10.0'">12.0.0.0</JellyfinTargetAbi>
+    <JellyfinTargetAbi Condition="'$(JellyfinTargetAbi)' == ''">10.11.0.0</JellyfinTargetAbi>
     <RootNamespace>Jellyfin.Plugin.StreamLimit</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Nullable>enable</Nullable>
@@ -17,7 +23,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" />
+    <!-- The server provides these assemblies at runtime: compile against them only, so the
+         publish output stays a single plugin DLL. -->
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Records the Jellyfin version and ABI this build targets, so the ABI test can check
+         the referenced assembly versions against them. -->
+    <AssemblyMetadata Include="JellyfinVersion" Value="$(JellyfinVersion)" />
+    <AssemblyMetadata Include="JellyfinTargetAbi" Value="$(JellyfinTargetAbi)" />
   </ItemGroup>
 
   <ItemGroup>

@@ -25,9 +25,14 @@ public static class PlayingSessions
     /// <param name="sessions">All server sessions.</param>
     /// <param name="userId">The user.</param>
     /// <param name="utcNow">Current UTC time.</param>
+    /// <param name="isExcluded">Optional filter for sessions that must not count (devices the limiter just stopped).</param>
     /// <returns>Distinct device ids (case-insensitive).</returns>
-    public static IReadOnlyCollection<string> GetPlayingDeviceIds(IEnumerable<SessionInfo> sessions, Guid userId, DateTime utcNow)
-        => Playing(sessions, userId, utcNow)
+    public static IReadOnlyCollection<string> GetPlayingDeviceIds(
+        IEnumerable<SessionInfo> sessions,
+        Guid userId,
+        DateTime utcNow,
+        Func<SessionInfo, bool>? isExcluded = null)
+        => Playing(sessions, userId, utcNow, isExcluded)
             .Where(s => !string.IsNullOrEmpty(s.DeviceId))
             .Select(s => s.DeviceId)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -40,9 +45,14 @@ public static class PlayingSessions
     /// <param name="sessions">All server sessions.</param>
     /// <param name="userId">The user.</param>
     /// <param name="utcNow">Current UTC time.</param>
+    /// <param name="isExcluded">Optional filter for sessions that must not count (devices the limiter just stopped).</param>
     /// <returns>Distinct stream keys (case-insensitive).</returns>
-    public static HashSet<string> GetPlayingStreamKeys(IEnumerable<SessionInfo> sessions, Guid userId, DateTime utcNow)
-        => Playing(sessions, userId, utcNow)
+    public static HashSet<string> GetPlayingStreamKeys(
+        IEnumerable<SessionInfo> sessions,
+        Guid userId,
+        DateTime utcNow,
+        Func<SessionInfo, bool>? isExcluded = null)
+        => Playing(sessions, userId, utcNow, isExcluded)
             .Select(StreamKey)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -54,12 +64,27 @@ public static class PlayingSessions
     public static string StreamKey(SessionInfo session)
         => string.IsNullOrEmpty(session.DeviceId) ? session.Id : session.DeviceId;
 
-    private static IEnumerable<SessionInfo> Playing(IEnumerable<SessionInfo> sessions, Guid userId, DateTime utcNow)
+    /// <summary>
+    /// Gets the user's sessions that count as actively playing.
+    /// </summary>
+    /// <param name="sessions">All server sessions.</param>
+    /// <param name="userId">The user.</param>
+    /// <param name="utcNow">Current UTC time.</param>
+    /// <returns>The playing sessions.</returns>
+    public static IEnumerable<SessionInfo> GetPlayingSessions(IEnumerable<SessionInfo> sessions, Guid userId, DateTime utcNow)
+        => Playing(sessions, userId, utcNow, null);
+
+    private static IEnumerable<SessionInfo> Playing(
+        IEnumerable<SessionInfo> sessions,
+        Guid userId,
+        DateTime utcNow,
+        Func<SessionInfo, bool>? isExcluded)
     {
         var staleBefore = utcNow - StaleAfter;
         return sessions.Where(s => s.UserId.Equals(userId)
                                    && s.NowPlayingItem is not null
                                    && s.IsActive
-                                   && s.LastPlaybackCheckIn >= staleBefore);
+                                   && s.LastPlaybackCheckIn >= staleBefore
+                                   && (isExcluded is null || !isExcluded(s)));
     }
 }

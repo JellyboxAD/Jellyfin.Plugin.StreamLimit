@@ -9,10 +9,10 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.StreamLimit.Web;
 
 /// <summary>
-/// Injects (or removes) the plugin's client script into the Jellyfin web client's
-/// index.html at startup, so a blocked stream can show a single custom message on
-/// web clients. Runs once at boot: the edit is re-applied on every start, which
-/// makes it survive Jellyfin/web updates that overwrite index.html.
+/// Removes the script block that versions up to 1.1.0.1 wrote into the web client's
+/// index.html on disk. The script is now added on the fly as the page is served (see
+/// <see cref="WebInjectionStartupFilter"/>), so the file must go back to its pristine
+/// state: otherwise turning the web message off would keep serving the old tag.
 /// </summary>
 public sealed class WebInjectionService : IHostedService
 {
@@ -33,54 +33,48 @@ public sealed class WebInjectionService : IHostedService
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        var enabled = Plugin.Instance?.Configuration.EnableWebMessage ?? false;
-        Apply(enabled);
+        RemoveLegacyBlock(_appPaths.WebPath, _logger);
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private void Apply(bool enabled)
+    /// <summary>
+    /// Removes the plugin's block from index.html on disk, when present. Best effort: an
+    /// unwritable web folder only logs a warning.
+    /// </summary>
+    /// <param name="webPath">The web client folder.</param>
+    /// <param name="logger">The logger.</param>
+    public static void RemoveLegacyBlock(string? webPath, ILogger logger)
     {
-        var indexPath = GetIndexPath();
-        if (indexPath is null)
+        if (string.IsNullOrEmpty(webPath))
         {
-            _logger.LogWarning("StreamLimit: web client index.html not found; the web message is unavailable");
             return;
         }
 
+        var indexPath = Path.Combine(webPath, "index.html");
         try
         {
-            var original = File.ReadAllText(indexPath);
-            var updated = enabled ? WebInjection.Add(original) : WebInjection.Remove(original);
-
-            if (!string.Equals(original, updated, StringComparison.Ordinal))
+            if (!File.Exists(indexPath))
             {
-                File.WriteAllText(indexPath, updated);
-                _logger.LogInformation(
-                    "StreamLimit: web message {State} in {Path}",
-                    enabled ? "injected" : "removed",
-                    indexPath);
+                return;
             }
+
+            var original = File.ReadAllText(indexPath);
+            if (!WebInjection.IsInjected(original))
+            {
+                return;
+            }
+
+            File.WriteAllText(indexPath, WebInjection.Remove(original));
+            logger.LogInformation("StreamLimit: removed the old on-disk web message tag from {Path}", indexPath);
         }
         catch (Exception ex)
         {
-            // A read-only web folder (common in Docker) must not break startup; the
-            // block still works, clients just show their own dialog.
-            _logger.LogWarning(ex, "StreamLimit: could not update the web client; falling back to the native dialog");
+            // Harmless for the block itself; the served page still gets exactly one
+            // script block, since the on-the-fly injection replaces any existing one.
+            logger.LogWarning(ex, "StreamLimit: could not remove the old web message tag from {Path}", indexPath);
         }
-    }
-
-    private string? GetIndexPath()
-    {
-        var webPath = _appPaths.WebPath;
-        if (string.IsNullOrEmpty(webPath))
-        {
-            return null;
-        }
-
-        var indexPath = Path.Combine(webPath, "index.html");
-        return File.Exists(indexPath) ? indexPath : null;
     }
 }

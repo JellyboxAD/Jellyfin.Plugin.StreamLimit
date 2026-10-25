@@ -98,6 +98,32 @@ public class ConfigurationMigrationTests
         Assert.False(config.ForceLogoutOnLimit);
         Assert.False(config.BlockUnidentifiedRequests);
         Assert.Equal(0, config.DefaultMaxStreams);
+        Assert.True(config.ExemptAdministrators);
+        Assert.True(config.LogBlocksToActivity);
+        Assert.Equal(string.Empty, config.WebhookUrl);
+        Assert.True(config.WebhookOnBlock);
+        Assert.False(config.WebhookOnAdminKick);
+    }
+
+    [Fact]
+    public void OptionsAddedIn1102_DefaultOnForExistingV1Config()
+    {
+        // A 1.1.0.x config (already v1) has no ExemptAdministrators/LogBlocksToActivity
+        // element: XmlSerializer keeps the constructor defaults and no migration step runs.
+        const string Xml = "<?xml version=\"1.0\"?>"
+                           + "<StreamLimiterConfiguration xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">"
+                           + "<ConfigVersion>1</ConfigVersion>"
+                           + "<UserStreamLimits>{\"38a5a5bb90ab4590837d16bcb0b1c1f0\":2}</UserStreamLimits>"
+                           + "<EnableHardBlock>true</EnableHardBlock>"
+                           + "</StreamLimiterConfiguration>";
+
+        var serializer = new System.Xml.Serialization.XmlSerializer(typeof(PluginConfiguration));
+        using var reader = new System.IO.StringReader(Xml);
+        var config = (PluginConfiguration)serializer.Deserialize(reader)!;
+
+        Assert.True(config.ExemptAdministrators);
+        Assert.True(config.LogBlocksToActivity);
+        Assert.False(ConfigurationMigration.Migrate(config));
     }
 
     [Fact]

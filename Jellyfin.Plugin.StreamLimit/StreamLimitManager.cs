@@ -2,7 +2,10 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
+using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.StreamLimit.Configuration;
+using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.StreamLimit;
@@ -15,6 +18,7 @@ namespace Jellyfin.Plugin.StreamLimit;
 public class StreamLimitManager
 {
     private readonly ILogger<StreamLimitManager> _logger;
+    private readonly IUserManager _userManager;
     private readonly object _lock = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _userLocks = new();
     private string? _cachedRaw;
@@ -24,16 +28,19 @@ public class StreamLimitManager
     /// Initializes a new instance of the <see cref="StreamLimitManager"/> class.
     /// </summary>
     /// <param name="logger">The logger.</param>
-    public StreamLimitManager(ILogger<StreamLimitManager> logger)
+    /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
+    public StreamLimitManager(ILogger<StreamLimitManager> logger, IUserManager userManager)
     {
         _logger = logger;
+        _userManager = userManager;
     }
 
     private static PluginConfiguration? Configuration => Plugin.Instance?.Configuration;
 
     /// <summary>
     /// Gets the effective stream limit for a user (explicit limit or the configured
-    /// default). 0 means unlimited.
+    /// default). 0 means unlimited, which is also the case for administrators while
+    /// <see cref="PluginConfiguration.ExemptAdministrators"/> is on.
     /// </summary>
     /// <param name="userId">The user id.</param>
     /// <returns>The effective limit.</returns>
@@ -45,7 +52,35 @@ public class StreamLimitManager
             return 0;
         }
 
-        return StreamLimitStore.GetEffectiveLimit(GetLimits(configuration), userId, configuration.DefaultMaxStreams);
+        var isExempt = configuration.ExemptAdministrators && IsAdministrator(userId);
+        return StreamLimitStore.GetEffectiveLimit(GetLimits(configuration), userId, configuration.DefaultMaxStreams, isExempt);
+    }
+
+    /// <summary>
+    /// Whether a user is exempt from limits (an administrator while
+    /// <see cref="PluginConfiguration.ExemptAdministrators"/> is on).
+    /// </summary>
+    /// <param name="userId">The user id.</param>
+    /// <returns>True when exempt.</returns>
+    public bool IsExempt(Guid userId)
+        => Configuration?.ExemptAdministrators == true && IsAdministrator(userId);
+
+    /// <summary>
+    /// Gets a user's name.
+    /// </summary>
+    /// <param name="userId">The user id.</param>
+    /// <returns>The name, or null when the user does not exist.</returns>
+    public string? GetUserName(Guid userId)
+    {
+        try
+        {
+            return userId.Equals(Guid.Empty) ? null : _userManager.GetUserById(userId)?.Username;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not resolve user {UserId}", userId);
+            return null;
+        }
     }
 
     /// <summary>
@@ -127,6 +162,27 @@ public class StreamLimitManager
     /// <returns>The user's enforcement lock.</returns>
     public SemaphoreSlim GetUserEnforcementLock(Guid userId)
         => _userLocks.GetOrAdd(userId, static _ => new SemaphoreSlim(1, 1));
+
+    private bool IsAdministrator(Guid userId)
+    {
+        if (userId.Equals(Guid.Empty))
+        {
+            return false;
+        }
+
+        try
+        {
+            // An in-memory dictionary lookup in Jellyfin's user manager (no database
+            // round trip), cheap enough for the gate's per-request hot path.
+            return _userManager.GetUserById(userId)?.HasPermission(PermissionKind.IsAdministrator) == true;
+        }
+        catch (Exception ex)
+        {
+            // Never let a lookup failure lift the limit: treat the user as non-admin.
+            _logger.LogDebug(ex, "Could not resolve the permissions of user {UserId}", userId);
+            return false;
+        }
+    }
 
     private Dictionary<string, int> GetLimits(PluginConfiguration configuration)
     {

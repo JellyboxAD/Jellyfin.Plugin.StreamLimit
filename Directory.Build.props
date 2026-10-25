@@ -4,10 +4,10 @@
          (and disable/uninstall URLs) from it. A mismatch makes them 404 (logo missing on Jellyfin 12
          with v1.1.1.0, whose DLL said 1.1.0.0). Jellyfin 10.11 line = 1.1.0.x, Jellyfin 12 line = 1.1.1.x. -->
     <PropertyGroup>
-        <Version>1.1.0.1</Version>
+        <Version>1.1.0.2</Version>
     </PropertyGroup>
     <PropertyGroup Condition="'$(PluginTargetFramework)' == 'net10.0'">
-        <Version>1.1.1.1</Version>
+        <Version>1.1.1.2</Version>
     </PropertyGroup>
     <PropertyGroup>
         <AssemblyVersion>$(Version)</AssemblyVersion>

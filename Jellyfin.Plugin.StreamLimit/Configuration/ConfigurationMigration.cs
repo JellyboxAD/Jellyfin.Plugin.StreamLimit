@@ -51,9 +51,11 @@ public static class ConfigurationMigration
         }
 
         // New enforcement options (EnableHardBlock, BlockPlaybackInfo, KillTranscodeJobs,
-        // DefaultMaxStreams, ForceLogoutOnLimit, BlockUnidentifiedRequests) are absent
-        // from an old XML, so XmlSerializer already left them at their constructor
-        // defaults — no action needed here.
+        // DefaultMaxStreams, ForceLogoutOnLimit, BlockUnidentifiedRequests, and since
+        // 1.1.0.2 ExemptAdministrators, LogBlocksToActivity and the webhook options) are absent from an old
+        // XML, so XmlSerializer already left them at their constructor defaults — no
+        // action and no schema bump needed: a v1 config from 1.1.0.x picks them up the
+        // same way.
 
         configuration.ConfigVersion = CurrentVersion;
         return true;

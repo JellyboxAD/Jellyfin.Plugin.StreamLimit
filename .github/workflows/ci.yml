@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and build both lines
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Run tests (Jellyfin 10.11 build)
+        run: dotnet test tests/Jellyfin.Plugin.StreamLimit.Tests/Jellyfin.Plugin.StreamLimit.Tests.csproj -c Release -p:JellyfinVersion=10.11.0
+
+      - name: Run tests (Jellyfin 12 build)
+        run: dotnet test tests/Jellyfin.Plugin.StreamLimit.Tests/Jellyfin.Plugin.StreamLimit.Tests.csproj -c Release -p:PluginTargetFramework=net10.0 -p:JellyfinVersion=12.0.0
+
+      - name: Build for Jellyfin 10.11 (net9.0)
+        run: dotnet publish Jellyfin.Plugin.StreamLimit/Jellyfin.Plugin.StreamLimit.csproj -c Release -p:JellyfinVersion=10.11.0 -o publish/net9
+
+      - name: Build for Jellyfin 12 (net10.0)
+        run: dotnet publish Jellyfin.Plugin.StreamLimit/Jellyfin.Plugin.StreamLimit.csproj -c Release -p:PluginTargetFramework=net10.0 -p:JellyfinVersion=12.0.0 -o publish/net10

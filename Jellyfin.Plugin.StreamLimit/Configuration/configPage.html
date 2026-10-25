@@ -31,12 +31,32 @@
         }
         .slNote.slBeta { border-left-color: #cc7b19; background: rgba(204, 123, 25, 0.08); }
         .slSub { margin: 1.2em 0 0.4em; font-weight: 600; opacity: 0.9; }
+        .slTableWrap { overflow-x: auto; }
+        .slTable { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+        .slTable th, .slTable td { text-align: left; padding: 0.45em 0.6em; border-bottom: 1px solid rgba(128, 128, 128, 0.25); vertical-align: middle; }
+        .slTable th { font-weight: 600; opacity: 0.8; white-space: nowrap; }
+        .slTable td.slActions { white-space: nowrap; text-align: right; }
+        .slTable .emby-button { margin: 0 0 0 0.4em; padding: 0.3em 0.8em; font-size: 0.9em; }
+        .slUserRow td { font-weight: 600; background: rgba(128, 128, 128, 0.08); }
+        .slMuted { opacity: 0.65; }
+        .slTag { display: inline-block; font-size: 0.75em; padding: 0.1em 0.5em; margin-left: 0.4em; border-radius: 0.75em; background: rgba(128, 128, 128, 0.3); }
+        .slStatus { margin: 0.6em 0 0; min-height: 1.4em; opacity: 0.85; }
+        .slInline { display: flex; gap: 0.8em; align-items: flex-end; flex-wrap: wrap; }
+        .slInline .inputContainer { flex: 1 1 20em; margin-bottom: 0; }
     </style>
 </head>
 <body>
     <div id="StreamLimiterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
         <div data-role="content">
             <div class="content-primary">
+                <!-- ========================= ACTIVE STREAMS ========================= -->
+                <div class="verticalSection slSection">
+                    <h2 class="sectionTitle">Active streams</h2>
+                    <p class="slLead">What the plugin counts right now, per user and device. Refreshes every 5 seconds while this page is open.</p>
+                    <div id="slActiveStreams" class="slTableWrap"><p class="slMuted">Loading…</p></div>
+                    <div id="slActiveStatus" class="slStatus"></div>
+                </div>
+
                 <form id="StreamLimiterConfigForm">
 
                     <!-- ============================ LIMITS ============================ -->
@@ -101,6 +121,18 @@
                             <span>Strict mode: block requests with no identifiable user <span class="slBadge">BETA</span></span>
                         </label>
                         <div class="fieldDescription checkboxFieldDescription">Off by default. By default a request whose user can't be identified is let through (fail-open). Enable to reject those too — safer, but may break unusual clients. Only turn on if you need it.</div>
+
+                        <label class="checkboxContainer">
+                            <input id="ExemptAdministrators" name="ExemptAdministrators" type="checkbox" is="emby-checkbox" />
+                            <span>Exempt administrators</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">On by default. Administrators are never limited, whatever their own limit or the default limit. Turn off to apply limits to administrators too.</div>
+
+                        <label class="checkboxContainer">
+                            <input id="LogBlocksToActivity" name="LogBlocksToActivity" type="checkbox" is="emby-checkbox" />
+                            <span>Record blocked streams in the activity log</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">On by default. Adds an entry to <em>Dashboard &gt; Activity</em> when a stream is blocked, with the user, device, client and IP address. At most one entry per user and device every 5 minutes.</div>
                     </div>
 
                     <!-- =========================== MESSAGE =========================== -->
@@ -111,12 +143,15 @@
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="MessageTitle">Title</label>
                             <input id="MessageTitle" name="MessageTitle" type="text" is="emby-input" placeholder="Stream Limit" />
-                            <div class="fieldDescription">Heading of the popup shown when a stream is blocked.</div>
+                            <div class="fieldDescription">Heading of the popup shown when a stream is blocked. Placeholders allowed (see below).</div>
                         </div>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="MessageText">Text</label>
                             <input id="MessageText" name="MessageText" type="text" is="emby-input" placeholder="Active streams exceeded" />
-                            <div class="fieldDescription">Body of the popup, e.g. "You have reached your simultaneous streams limit."</div>
+                            <div class="fieldDescription">Body of the popup, e.g. "You have reached your simultaneous streams limit."<br />
+                                Placeholders, in the title and the text: <code>{{user}}</code> the user's name, <code>{{active}}</code> the streams already playing,
+                                <code>{{limit}}</code> the user's limit, <code>{{devices}}</code> the other devices playing.
+                                Example: <em>{{user}}, you are already watching on {{devices}} ({{active}}/{{limit}}).</em></div>
                         </div>
 
                         <div class="slSub">Where the message appears</div>
@@ -125,19 +160,47 @@
                             <input id="EnableWebMessage" name="EnableWebMessage" type="checkbox" is="emby-checkbox" />
                             <span>Show my message on web clients <span class="slBadge">BETA</span></span>
                         </label>
-                        <div class="fieldDescription checkboxFieldDescription">Recommended, on by default. Displays a single clean popup with your title/text above — instead of the web client's own generic "not allowed" dialog. <strong>Web clients only</strong> (browser, Android app webview, iOS web). A browser refresh is needed after changing this.</div>
+                        <div class="fieldDescription checkboxFieldDescription">Recommended, on by default. Displays a single clean popup with your title/text above — instead of the web client's own generic "not allowed" dialog. <strong>Web clients only</strong> (browser, Android app webview, iOS web). Added to the web client on the fly — no server restart needed and it works with read-only web folders; just refresh the browser after changing this.</div>
 
                         <label class="checkboxContainer">
                             <input id="ShowLimitPopup" name="ShowLimitPopup" type="checkbox" is="emby-checkbox" />
                             <span>Also push a server message (advanced)</span>
                         </label>
-                        <div class="fieldDescription checkboxFieldDescription">Off by default. Sends a Jellyfin "display message" command. Only some native apps show it (e.g. Swiftfin), and it adds a second popup on web clients. Leave off unless you specifically want it for a native client.</div>
+                        <div class="fieldDescription checkboxFieldDescription">Off by default. Sends a Jellyfin "display message" command. Only some native apps show it (e.g. Android TV, as a toast), and it adds a second popup on web clients. Leave off unless you specifically want it for a native client.</div>
 
                         <div class="slNote">
                             <strong>Note on native apps.</strong> Swiftfin, AFinity, Streamyfin, Infuse and other native clients display their own
                             error screen when a stream is blocked, and no server plugin can change or hide it — the block still works, only the
                             wording is theirs. Custom wording is possible on web clients only.
                         </div>
+                    </div>
+
+                    <!-- ======================== NOTIFICATIONS ======================== -->
+                    <div class="verticalSection slSection">
+                        <h2 class="sectionTitle">Notifications</h2>
+                        <p class="slLead">Get a message when a stream is blocked: Discord, Apprise or any JSON webhook.</p>
+
+                        <div class="slInline">
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="WebhookUrl">Webhook URL</label>
+                                <input id="WebhookUrl" name="WebhookUrl" type="url" is="emby-input" placeholder="https://discord.com/api/webhooks/..." />
+                            </div>
+                            <button is="emby-button" type="button" id="slTestWebhook" class="raised emby-button"><span>Send test</span></button>
+                        </div>
+                        <div class="fieldDescription">Empty = no notifications. A Discord webhook URL gets a Discord message; any other <code>http(s)</code> URL gets a JSON document (<code>title</code>, <code>body</code>, <code>type</code>… — works as-is with the Apprise API <code>/notify</code> endpoint). The test uses the URL typed above, even before saving.</div>
+                        <div id="slWebhookStatus" class="slStatus"></div>
+
+                        <label class="checkboxContainer">
+                            <input id="WebhookOnBlock" name="WebhookOnBlock" type="checkbox" is="emby-checkbox" />
+                            <span>Notify when a stream is blocked</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">On by default. At most one notification per user and device every 5 minutes.</div>
+
+                        <label class="checkboxContainer">
+                            <input id="WebhookOnAdminKick" name="WebhookOnAdminKick" type="checkbox" is="emby-checkbox" />
+                            <span>Notify when an administrator stops a stream</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Off by default. Sent when a stream is stopped from <em>Active streams</em> above.</div>
                     </div>
 
                     <div>
@@ -232,10 +295,15 @@
                         document.getElementById('BlockUnidentifiedRequests').checked = config.BlockUnidentifiedRequests === true;
                         document.getElementById('KillTranscodeJobs').checked = config.KillTranscodeJobs !== false;
                         document.getElementById('ForceLogoutOnLimit').checked = config.ForceLogoutOnLimit === true;
+                        document.getElementById('ExemptAdministrators').checked = config.ExemptAdministrators !== false;
+                        document.getElementById('LogBlocksToActivity').checked = config.LogBlocksToActivity !== false;
                         document.getElementById('EnableWebMessage').checked = config.EnableWebMessage !== false;
                         document.getElementById('ShowLimitPopup').checked = config.ShowLimitPopup === true;
                         document.getElementById('MessageTitle').value = config.MessageTitle || '';
                         document.getElementById('MessageText').value = config.MessageText || '';
+                        document.getElementById('WebhookUrl').value = config.WebhookUrl || '';
+                        document.getElementById('WebhookOnBlock').checked = config.WebhookOnBlock !== false;
+                        document.getElementById('WebhookOnAdminKick').checked = config.WebhookOnAdminKick === true;
                         Dashboard.hideLoadingMsg();
                     }, function () {
                         Dashboard.hideLoadingMsg();
@@ -246,8 +314,213 @@
 
                 document.querySelector('#StreamLimiterConfigPage').addEventListener('pageshow', loadSettings);
 
+                function isWebhookUrl(url) {
+                    return /^https?:\/\/[^\s\/?#]+/i.test(url);
+                }
+
+                // ---------------------------- Active streams ----------------------------
+                // Every value is written with textContent: user, device and item names come
+                // from clients and must never be interpreted as markup.
+                var refreshTimer = null;
+                var pageVisible = false;
+
+                function cell(row, text, className) {
+                    var td = document.createElement('td');
+                    if (className) {
+                        td.className = className;
+                    }
+                    if (text !== null && text !== undefined) {
+                        td.textContent = String(text);
+                    }
+                    row.appendChild(td);
+                    return td;
+                }
+
+                function formatTime(iso) {
+                    if (!iso) {
+                        return '';
+                    }
+                    var date = new Date(iso);
+                    return isNaN(date.getTime()) ? '' : date.toLocaleTimeString();
+                }
+
+                function setStatus(id, text) {
+                    document.getElementById(id).textContent = text || '';
+                }
+
+                function kick(user, stream, logout) {
+                    var who = (user.userName || user.userId) + ' on ' + (stream.deviceName || stream.deviceId);
+                    var question = logout
+                        ? 'Stop the stream of ' + who + ' and log this device out? The user will have to sign in again on it.'
+                        : 'Stop the stream of ' + who + '?';
+                    if (!window.confirm(question)) {
+                        return;
+                    }
+                    ApiClient.fetch({
+                        type: 'POST',
+                        url: ApiClient.getUrl('StreamLimit/KickStream', { userId: user.userId, deviceId: stream.deviceId, logout: logout }),
+                        dataType: 'json'
+                    }).then(function (result) {
+                        setStatus('slActiveStatus', 'Stopped ' + who + ': ' + result.stopped + ' session(s) stopped'
+                            + (result.aborted ? ', ' + result.aborted + ' download(s) cut' : '') + (result.released ? ', slot released' : '') + (result.loggedOut ? ', device logged out' : '') + '.');
+                        refreshActive();
+                    }, function () {
+                        setStatus('slActiveStatus', 'Could not stop the stream of ' + who + '.');
+                    });
+                }
+
+                function actionButton(label, onClick) {
+                    var button = document.createElement('button');
+                    button.type = 'button';
+                    button.setAttribute('is', 'emby-button');
+                    button.className = 'raised emby-button';
+                    button.textContent = label;
+                    button.addEventListener('click', onClick);
+                    return button;
+                }
+
+                function renderActive(users) {
+                    var container = document.getElementById('slActiveStreams');
+                    container.textContent = '';
+                    if (!users || !users.length) {
+                        var empty = document.createElement('p');
+                        empty.className = 'slMuted';
+                        empty.textContent = 'No active streams.';
+                        container.appendChild(empty);
+                        return;
+                    }
+
+                    var table = document.createElement('table');
+                    table.className = 'slTable';
+                    var head = document.createElement('tr');
+                    ['Device', 'Client', 'Playing', 'Method', 'IP address', 'Last activity', ''].forEach(function (title) {
+                        var th = document.createElement('th');
+                        th.textContent = title;
+                        head.appendChild(th);
+                    });
+                    var thead = document.createElement('thead');
+                    thead.appendChild(head);
+                    table.appendChild(thead);
+                    var body = document.createElement('tbody');
+
+                    users.forEach(function (user) {
+                        var counted = user.streams.filter(function (s) { return !s.enforced; }).length;
+                        var limitText = user.exempt ? 'exempt (administrator)'
+                            : user.limit > 0 ? counted + ' / ' + user.limit + ' streams' : counted + ' stream(s), unlimited';
+                        var userRow = document.createElement('tr');
+                        userRow.className = 'slUserRow';
+                        var userCell = cell(userRow, (user.userName || user.userId) + ' — ' + limitText);
+                        userCell.colSpan = 7;
+                        body.appendChild(userRow);
+
+                        user.streams.forEach(function (stream) {
+                            var row = document.createElement('tr');
+                            var deviceCell = cell(row, stream.deviceName || stream.deviceId);
+                            if (stream.enforced) {
+                                var tag = document.createElement('span');
+                                tag.className = 'slTag';
+                                tag.textContent = 'stopped, not counted';
+                                deviceCell.appendChild(tag);
+                            }
+                            if (stream.source === 'slot') {
+                                var slotTag = document.createElement('span');
+                                slotTag.className = 'slTag';
+                                slotTag.textContent = 'HTTP only';
+                                deviceCell.appendChild(slotTag);
+                            }
+                            cell(row, stream.client);
+                            cell(row, stream.itemName);
+                            cell(row, stream.playMethod === 'unknown' ? '' : stream.playMethod);
+                            cell(row, stream.remoteEndPoint);
+                            cell(row, formatTime(stream.lastActivity));
+                            var actions = cell(row, null, 'slActions');
+                            actions.appendChild(actionButton('Stop', function () { kick(user, stream, false); }));
+                            actions.appendChild(actionButton('Stop + log out', function () { kick(user, stream, true); }));
+                            body.appendChild(row);
+                        });
+                    });
+
+                    table.appendChild(body);
+                    container.appendChild(table);
+                }
+
+                function refreshActive() {
+                    ApiClient.fetch({
+                        type: 'GET',
+                        url: ApiClient.getUrl('StreamLimit/ActiveStreams'),
+                        dataType: 'json'
+                    }).then(renderActive, function () {
+                        setStatus('slActiveStatus', 'Could not load the active streams.');
+                    });
+                }
+
+                function startRefresh() {
+                    stopRefresh();
+                    if (!pageVisible || document.hidden) {
+                        return;
+                    }
+                    refreshActive();
+                    refreshTimer = setInterval(function () {
+                        // Stop once the page has been left without a hide event.
+                        if (!document.getElementById('slActiveStreams')) {
+                            stopRefresh();
+                            return;
+                        }
+                        refreshActive();
+                    }, 5000);
+                }
+
+                function stopRefresh() {
+                    if (refreshTimer) {
+                        clearInterval(refreshTimer);
+                        refreshTimer = null;
+                    }
+                }
+
+                var configPage = document.querySelector('#StreamLimiterConfigPage');
+                configPage.addEventListener('pageshow', function () { pageVisible = true; startRefresh(); });
+                configPage.addEventListener('viewshow', function () { pageVisible = true; startRefresh(); });
+                ['pagehide', 'viewhide', 'viewbeforehide'].forEach(function (name) {
+                    configPage.addEventListener(name, function () { pageVisible = false; stopRefresh(); });
+                });
+                document.addEventListener('visibilitychange', function () {
+                    if (document.hidden) {
+                        stopRefresh();
+                    } else {
+                        startRefresh();
+                    }
+                });
+
+                // ----------------------------- Webhook test ------------------------------
+                document.getElementById('slTestWebhook').addEventListener('click', function () {
+                    var url = document.getElementById('WebhookUrl').value.trim();
+                    if (url && !isWebhookUrl(url)) {
+                        setStatus('slWebhookStatus', 'The webhook URL must start with http:// or https://');
+                        return;
+                    }
+                    setStatus('slWebhookStatus', 'Sending…');
+                    ApiClient.fetch({
+                        type: 'POST',
+                        url: ApiClient.getUrl('StreamLimit/TestWebhook', url ? { url: url } : {}),
+                        dataType: 'json'
+                    }).then(function (result) {
+                        setStatus('slWebhookStatus', result.ok
+                            ? 'Test sent (HTTP ' + result.status + ').'
+                            : 'Test failed' + (result.status ? ' (HTTP ' + result.status + ')' : '') + (result.error ? ': ' + result.error : '') + '.');
+                    }, function () {
+                        setStatus('slWebhookStatus', 'No valid webhook URL to test.');
+                    });
+                });
+
                 document.querySelector('#StreamLimiterConfigForm').addEventListener('submit', function (e) {
                     e.preventDefault();
+
+                    var webhookUrl = document.getElementById('WebhookUrl').value.trim();
+                    if (webhookUrl && !isWebhookUrl(webhookUrl)) {
+                        Dashboard.alert('The webhook URL must start with http:// or https://');
+                        return false;
+                    }
+
                     Dashboard.showLoadingMsg();
 
                     var ddlUsers = document.getElementById('Users');
@@ -272,14 +545,22 @@
                         config.BlockUnidentifiedRequests = document.getElementById('BlockUnidentifiedRequests').checked;
                         config.KillTranscodeJobs = document.getElementById('KillTranscodeJobs').checked;
                         config.ForceLogoutOnLimit = document.getElementById('ForceLogoutOnLimit').checked;
+                        config.ExemptAdministrators = document.getElementById('ExemptAdministrators').checked;
+                        config.LogBlocksToActivity = document.getElementById('LogBlocksToActivity').checked;
                         config.EnableWebMessage = document.getElementById('EnableWebMessage').checked;
                         config.ShowLimitPopup = document.getElementById('ShowLimitPopup').checked;
                         config.MessageTitle = document.getElementById('MessageTitle').value;
                         config.MessageText = document.getElementById('MessageText').value;
+                        config.WebhookUrl = webhookUrl;
+                        config.WebhookOnBlock = document.getElementById('WebhookOnBlock').checked;
+                        config.WebhookOnAdminKick = document.getElementById('WebhookOnAdminKick').checked;
 
                         ApiClient.updatePluginConfiguration(pluginUniqueId, config).then(function (result) {
                             Dashboard.processPluginConfigurationUpdateResult(result);
                             populateUserDropdown(ddlUsers.value);
+                        }, function () {
+                            Dashboard.hideLoadingMsg();
+                            Dashboard.alert('The settings could not be saved.');
                         });
                     });
 

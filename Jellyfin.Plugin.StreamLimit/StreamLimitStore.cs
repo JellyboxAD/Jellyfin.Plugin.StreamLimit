@@ -100,7 +100,26 @@ public static class StreamLimitStore
     /// <param name="defaultLimit">The default limit for users without an explicit entry.</param>
     /// <returns>The effective limit, 0 when unlimited.</returns>
     public static int GetEffectiveLimit(IReadOnlyDictionary<string, int> limits, Guid userId, int defaultLimit)
+        => GetEffectiveLimit(limits, userId, defaultLimit, isExempt: false);
+
+    /// <summary>
+    /// Resolves the effective limit for a user like
+    /// <see cref="GetEffectiveLimit(IReadOnlyDictionary{string, int}, Guid, int)"/>, except
+    /// that an exempt user (an administrator while the exemption is on) is always unlimited,
+    /// whatever their explicit or default limit.
+    /// </summary>
+    /// <param name="limits">The parsed limit map.</param>
+    /// <param name="userId">The user id.</param>
+    /// <param name="defaultLimit">The default limit for users without an explicit entry.</param>
+    /// <param name="isExempt">Whether the user is exempt from limits.</param>
+    /// <returns>The effective limit, 0 when unlimited.</returns>
+    public static int GetEffectiveLimit(IReadOnlyDictionary<string, int> limits, Guid userId, int defaultLimit, bool isExempt)
     {
+        if (isExempt)
+        {
+            return 0;
+        }
+
         if (limits.TryGetValue(NormalizeUserKey(userId), out var limit) && limit > 0)
         {
             return limit;

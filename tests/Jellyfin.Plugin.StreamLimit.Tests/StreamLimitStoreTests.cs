@@ -114,6 +114,25 @@ public class StreamLimitStoreTests
     }
 
     [Fact]
+    public void GetEffectiveLimit_ExemptUser_IsUnlimited()
+    {
+        // Administrators with the exemption on: neither their own nor the default limit applies.
+        var limits = new Dictionary<string, int> { [StreamLimitStore.NormalizeUserKey(UserA)] = 2 };
+
+        Assert.Equal(0, StreamLimitStore.GetEffectiveLimit(limits, UserA, 5, isExempt: true));
+        Assert.Equal(0, StreamLimitStore.GetEffectiveLimit(limits, UserB, 5, isExempt: true));
+    }
+
+    [Fact]
+    public void GetEffectiveLimit_NotExempt_KeepsNormalResolution()
+    {
+        var limits = new Dictionary<string, int> { [StreamLimitStore.NormalizeUserKey(UserA)] = 2 };
+
+        Assert.Equal(2, StreamLimitStore.GetEffectiveLimit(limits, UserA, 5, isExempt: false));
+        Assert.Equal(5, StreamLimitStore.GetEffectiveLimit(limits, UserB, 5, isExempt: false));
+    }
+
+    [Fact]
     public void NormalizeUserKey_IsDashlessLowercase()
     {
         Assert.Equal("38a5a5bb90ab4590837d16bcb0b1c1f0", StreamLimitStore.NormalizeUserKey(UserA));

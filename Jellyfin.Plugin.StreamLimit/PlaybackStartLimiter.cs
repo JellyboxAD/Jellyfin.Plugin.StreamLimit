@@ -1,17 +1,13 @@
 using System;
-using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Data.Queries;
-using Jellyfin.Plugin.StreamLimit.Configuration;
 using Jellyfin.Plugin.StreamLimit.Gate;
-using MediaBrowser.Controller.Devices;
+using Jellyfin.Plugin.StreamLimit.Notifications;
 using MediaBrowser.Controller.Events;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Controller.Session;
-using MediaBrowser.Model.Session;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.StreamLimit;
@@ -22,39 +18,58 @@ namespace Jellyfin.Plugin.StreamLimit;
 /// <remarks>
 /// Enforcement is layered so it also works for clients that ignore remote
 /// stop commands (Infuse, external players, some TV clients):
-/// 1. a Stop playstate command (well-behaved clients),
+/// 1. a Stop playstate command (well-behaved clients), plus a server-side playback
+///    stop for sessions that cannot receive commands,
 /// 2. killing the server-side transcode job (clients that ignore commands),
 /// 3. optionally revoking the device token (cuts direct-play HTTP streams too).
+/// The stopped device is then recorded in the <see cref="EnforcedDeviceRegistry"/>, so a
+/// client that keeps its session alive afterwards does not keep holding a stream.
 /// </remarks>
 public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs>
 {
     private static int _taskCounter;
 
     private readonly ISessionManager _sessionManager;
-    private readonly ITranscodeManager _transcodeManager;
-    private readonly IDeviceManager _deviceManager;
     private readonly StreamLimitManager _limitManager;
+    private readonly EnforcedDeviceRegistry _enforcedDevices;
+    private readonly StreamSlotTracker _tracker;
+    private readonly PlaySessionRegistry _playSessions;
+    private readonly StreamEnforcer _enforcer;
+    private readonly BlockActivityLogger _activityLogger;
+    private readonly WebhookNotifier _webhookNotifier;
     private readonly ILogger<PlaybackStartLimiter> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PlaybackStartLimiter"/> class.
     /// </summary>
     /// <param name="sessionManager">Instance of the <see cref="ISessionManager"/> interface.</param>
-    /// <param name="transcodeManager">Instance of the <see cref="ITranscodeManager"/> interface.</param>
-    /// <param name="deviceManager">Instance of the <see cref="IDeviceManager"/> interface.</param>
     /// <param name="limitManager">The stream limit manager.</param>
+    /// <param name="enforcedDevices">The registry of devices the limit was enforced on.</param>
+    /// <param name="tracker">The gate's slot tracker (for the other devices of the message).</param>
+    /// <param name="playSessions">The registry of the sessions' PlaySessionIds.</param>
+    /// <param name="enforcer">The shared stop actions.</param>
+    /// <param name="activityLogger">The activity log writer for blocked streams.</param>
+    /// <param name="webhookNotifier">The webhook notifier.</param>
     /// <param name="logger">The logger.</param>
     public PlaybackStartLimiter(
         ISessionManager sessionManager,
-        ITranscodeManager transcodeManager,
-        IDeviceManager deviceManager,
         StreamLimitManager limitManager,
+        EnforcedDeviceRegistry enforcedDevices,
+        StreamSlotTracker tracker,
+        PlaySessionRegistry playSessions,
+        StreamEnforcer enforcer,
+        BlockActivityLogger activityLogger,
+        WebhookNotifier webhookNotifier,
         ILogger<PlaybackStartLimiter> logger)
     {
         _sessionManager = sessionManager;
-        _transcodeManager = transcodeManager;
-        _deviceManager = deviceManager;
         _limitManager = limitManager;
+        _enforcedDevices = enforcedDevices;
+        _tracker = tracker;
+        _playSessions = playSessions;
+        _enforcer = enforcer;
+        _activityLogger = activityLogger;
+        _webhookNotifier = webhookNotifier;
         _logger = logger;
     }
 
@@ -72,6 +87,10 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
         {
             return Task.CompletedTask;
         }
+
+        // Kept for every playback: the admin live view needs it to kill only this
+        // playback's transcode job (SessionInfo does not expose it).
+        _playSessions.Remember(session.Id, eventArgs.PlaySessionId);
 
         var userId = session.UserId;
         var maxStreamsAllowed = _limitManager.GetEffectiveLimit(userId);
@@ -99,8 +118,15 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
             // legitimate stream killed. The starting session always counts. Trade-off: a
             // client that stops reporting progress for 3+ minutes is no longer counted here;
             // the HTTP gate (traffic-based) still covers it when the hard block is on.
-            var playingStreams = PlayingSessions.GetPlayingStreamKeys(_sessionManager.Sessions, userId, DateTime.UtcNow);
-            playingStreams.Add(PlayingSessions.StreamKey(session));
+            // Devices we already stopped don't count either, whatever their client keeps
+            // reporting (see EnforcedDeviceRegistry).
+            var startingKey = PlayingSessions.StreamKey(session);
+            var playingStreams = PlayingSessions.GetPlayingStreamKeys(
+                _sessionManager.Sessions,
+                userId,
+                DateTime.UtcNow,
+                s => _enforcedDevices.IsEnforced(userId, PlayingSessions.StreamKey(s)));
+            playingStreams.Add(startingKey);
             var activeStreamsForUser = playingStreams.Count;
 
             _logger.LogInformation(
@@ -112,10 +138,30 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
 
             if (activeStreamsForUser <= maxStreamsAllowed)
             {
+                // A legitimate start: if this device was stopped earlier, it counts again.
+                _enforcedDevices.Clear(userId, startingKey);
                 return;
             }
 
-            await LimitPlayback(eventArgs, session, taskNumber).ConfigureAwait(false);
+            // The other devices of the message: the counted sessions plus the gate's slots.
+            var otherDevices = playingStreams
+                .Concat(_tracker.GetHeldDevices(userId, Array.Empty<string>()))
+                .Where(key => !string.Equals(key, startingKey, StringComparison.OrdinalIgnoreCase));
+            var userSessions = _sessionManager.Sessions.Where(s => s.UserId.Equals(userId)).ToList();
+
+            var blocked = new BlockedStream(
+                userId,
+                session.UserName,
+                startingKey,
+                session.DeviceName,
+                session.Client,
+                session.RemoteEndPoint,
+                maxStreamsAllowed,
+                "playback start limiter",
+                activeStreamsForUser - 1,
+                MessageTemplate.DescribeDevices(otherDevices, userSessions));
+
+            await LimitPlayback(eventArgs, session, blocked, taskNumber).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -127,8 +173,9 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
         }
     }
 
-    private async Task LimitPlayback(PlaybackStartEventArgs eventArgs, SessionInfo session, int taskNumber)
+    private async Task LimitPlayback(PlaybackStartEventArgs eventArgs, SessionInfo session, BlockedStream blocked, int taskNumber)
     {
+        var context = taskNumber.ToString(CultureInfo.InvariantCulture);
         _logger.LogInformation(
             "[{TaskNumber}] Limit exceeded. Stopping playback on session {SessionId} (client: {Client}, device: {Device})",
             taskNumber,
@@ -136,142 +183,43 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
             session.Client,
             session.DeviceName);
 
-        await StopPlayback(session, taskNumber).ConfigureAwait(false);
-        await KillTranscodeJobs(eventArgs, session, taskNumber).ConfigureAwait(false);
+        _enforcedDevices.Record(session.UserId, blocked.DeviceId);
+        _activityLogger.LogBlocked(blocked);
+        _webhookNotifier.NotifyBlocked(blocked);
+
+        await _enforcer.StopAsync(session, eventArgs.PlaySessionId, eventArgs.MediaSourceId, context).ConfigureAwait(false);
+
+        // Recorded again: our own server-side stop publishes a playback-stopped event
+        // whose releaser clears the entry, while the client may well keep its session
+        // alive afterwards (the very zombie the registry exists for).
+        _enforcedDevices.Record(session.UserId, blocked.DeviceId);
+
+        if (Plugin.Instance?.Configuration.KillTranscodeJobs == true)
+        {
+            await _enforcer.KillTranscodeJobsAsync(session.DeviceId, eventArgs.PlaySessionId, context).ConfigureAwait(false);
+        }
 
         // Give the client a moment to process the stop before showing the message,
         // otherwise some clients drop the dialog during the screen transition.
         await Task.Delay(500).ConfigureAwait(false);
-        await ShowLimitMessage(session, taskNumber).ConfigureAwait(false);
-        await LogoutDevice(session, taskNumber).ConfigureAwait(false);
-
-        _logger.LogInformation("[{TaskNumber}] Stream limit enforced for session {SessionId}", taskNumber, session.Id);
-    }
-
-    private async Task StopPlayback(SessionInfo session, int taskNumber)
-    {
-        try
-        {
-            await _sessionManager.SendPlaystateCommand(
-                session.Id,
-                session.Id,
-                new PlaystateRequest
-                {
-                    Command = PlaystateCommand.Stop,
-                    ControllingUserId = StreamLimitStore.NormalizeUserKey(session.UserId),
-                    SeekPositionTicks = 0,
-                },
-                CancellationToken.None).ConfigureAwait(false);
-
-            _logger.LogInformation("[{TaskNumber}] Stop command sent", taskNumber);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[{TaskNumber}] Failed to send stop command", taskNumber);
-        }
-    }
-
-    private async Task KillTranscodeJobs(PlaybackStartEventArgs eventArgs, SessionInfo session, int taskNumber)
-    {
-        if (Plugin.Instance?.Configuration.KillTranscodeJobs != true)
-        {
-            return;
-        }
-
-        // Without a PlaySessionId, Jellyfin kills every transcode job of the device,
-        // which could take down an unrelated, legitimate stream sharing that device id.
-        if (string.IsNullOrEmpty(session.DeviceId) || string.IsNullOrEmpty(eventArgs.PlaySessionId))
-        {
-            return;
-        }
-
-        try
-        {
-            // Kills the ffmpeg process feeding the offending stream. Clients that
-            // ignore the stop command lose their source and stop on their own.
-            await _transcodeManager.KillTranscodingJobs(
-                session.DeviceId,
-                eventArgs.PlaySessionId,
-                _ => true).ConfigureAwait(false);
-
-            _logger.LogInformation("[{TaskNumber}] Transcode jobs killed for device {DeviceId}", taskNumber, session.DeviceId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[{TaskNumber}] Failed to kill transcode jobs", taskNumber);
-        }
-    }
-
-    private async Task ShowLimitMessage(SessionInfo session, int taskNumber)
-    {
-        var configuration = Plugin.Instance?.Configuration;
 
         // Off by default: the stop command already makes the client surface its own
         // state; a custom popup is redundant. See PluginConfiguration.ShowLimitPopup.
-        if (configuration?.ShowLimitPopup != true)
+        var configuration = Plugin.Instance?.Configuration;
+        if (configuration?.ShowLimitPopup == true)
         {
-            return;
+            await _enforcer.SendMessageAsync(
+                session,
+                MessageTemplate.Render(configuration.ResolvedMessageTitle, blocked.MessageValues),
+                MessageTemplate.Render(configuration.ResolvedMessageText, blocked.MessageValues),
+                context).ConfigureAwait(false);
         }
 
-        try
+        if (configuration?.ForceLogoutOnLimit == true)
         {
-            await _sessionManager.SendMessageCommand(
-                session.Id,
-                session.Id,
-                new MessageCommand
-                {
-                    Header = configuration.ResolvedMessageTitle,
-                    Text = configuration.ResolvedMessageText,
-                },
-                CancellationToken.None).ConfigureAwait(false);
-
-            _logger.LogInformation("[{TaskNumber}] Limit message sent", taskNumber);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[{TaskNumber}] Failed to send limit message", taskNumber);
-        }
-    }
-
-    private async Task LogoutDevice(SessionInfo session, int taskNumber)
-    {
-        if (Plugin.Instance?.Configuration.ForceLogoutOnLimit != true)
-        {
-            return;
+            await _enforcer.LogoutDeviceAsync(session.UserId, session.DeviceId, context).ConfigureAwait(false);
         }
 
-        if (string.IsNullOrEmpty(session.DeviceId))
-        {
-            return;
-        }
-
-        try
-        {
-            // Logout expects an access token or a device entity, not a session id.
-            // Logging out a device deletes its record (token revoked AND the entry
-            // disappears from Settings > Devices); the user must sign in again.
-            var devices = _deviceManager.GetDevices(new DeviceQuery
-            {
-                DeviceId = session.DeviceId,
-                UserId = session.UserId,
-            }).Items;
-
-            if (devices.Count == 0)
-            {
-                _logger.LogWarning("[{TaskNumber}] No device found to log out (device id {DeviceId})", taskNumber, session.DeviceId);
-                return;
-            }
-
-            foreach (var device in devices)
-            {
-                await _sessionManager.Logout(device).ConfigureAwait(false);
-            }
-
-            _logger.LogInformation("[{TaskNumber}] Device {DeviceId} logged out", taskNumber, session.DeviceId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[{TaskNumber}] Failed to log out device", taskNumber);
-        }
+        _logger.LogInformation("[{TaskNumber}] Stream limit enforced for session {SessionId}", taskNumber, session.Id);
     }
 }

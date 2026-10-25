@@ -121,8 +121,11 @@ public sealed class StreamSlotTracker
     /// </summary>
     /// <param name="userId">The user.</param>
     /// <param name="deviceId">The device.</param>
-    public void BeginRequest(Guid userId, string deviceId)
+    /// <param name="abort">Aborts the response (the gate passes <c>HttpContext.Abort</c>); used by an admin kick.</param>
+    /// <returns>The registration of this response, to pass to <see cref="EndRequest"/>.</returns>
+    public object BeginRequest(Guid userId, string deviceId, Action? abort = null)
     {
+        var registration = new object();
         var userSlots = _slots.GetOrAdd(userId, static _ => new ConcurrentDictionary<string, SlotState>(StringComparer.OrdinalIgnoreCase));
         lock (userSlots)
         {
@@ -135,9 +138,11 @@ public sealed class StreamSlotTracker
                 userSlots[deviceId] = slot;
             }
 
-            slot.InFlight++;
+            slot.Requests[registration] = abort;
             slot.LastSeenUtc = _clock.GetUtcNow();
         }
+
+        return registration;
     }
 
     /// <summary>
@@ -145,7 +150,12 @@ public sealed class StreamSlotTracker
     /// </summary>
     /// <param name="userId">The user.</param>
     /// <param name="deviceId">The device.</param>
-    public void EndRequest(Guid userId, string deviceId)
+    /// <param name="registration">
+    /// The registration returned by <see cref="BeginRequest"/>. Only that response is ended,
+    /// so a response aborted by a kick cannot end another response of a newer slot. When
+    /// omitted, one in-flight response of the device is ended.
+    /// </param>
+    public void EndRequest(Guid userId, string deviceId, object? registration = null)
     {
         if (!_slots.TryGetValue(userId, out var userSlots))
         {
@@ -154,12 +164,72 @@ public sealed class StreamSlotTracker
 
         lock (userSlots)
         {
-            if (userSlots.TryGetValue(deviceId, out var slot))
+            if (!userSlots.TryGetValue(deviceId, out var slot))
             {
-                slot.InFlight = Math.Max(0, slot.InFlight - 1);
-                slot.LastSeenUtc = _clock.GetUtcNow();
+                return;
+            }
+
+            if (registration is null)
+            {
+                foreach (var key in slot.Requests.Keys)
+                {
+                    slot.Requests.Remove(key);
+                    break;
+                }
+            }
+            else if (!slot.Requests.Remove(registration))
+            {
+                // Belongs to a slot that was kicked and since recreated: not ours to touch.
+                return;
+            }
+
+            slot.LastSeenUtc = _clock.GetUtcNow();
+        }
+    }
+
+    /// <summary>
+    /// Kicks a device right away (admin action): aborts its in-flight media responses and
+    /// removes its slot, even while responses are streaming.
+    /// </summary>
+    /// <param name="userId">The user.</param>
+    /// <param name="deviceId">The device.</param>
+    /// <returns>The number of responses aborted, and whether a slot was removed.</returns>
+    public (int Aborted, bool Released) AbortDevice(Guid userId, string deviceId)
+    {
+        if (!_slots.TryGetValue(userId, out var userSlots))
+        {
+            return (0, false);
+        }
+
+        List<Action> aborts;
+        lock (userSlots)
+        {
+            if (!userSlots.TryRemove(deviceId, out var slot))
+            {
+                return (0, false);
+            }
+
+            aborts = slot.Requests.Values.OfType<Action>().ToList();
+            slot.Requests.Clear();
+        }
+
+        // Outside the lock: aborting runs connection code. It is safe from any thread, and
+        // a failure must never reach the caller (or the aborted request's pipeline).
+        var aborted = 0;
+        foreach (var abort in aborts)
+        {
+            try
+            {
+                abort();
+                aborted++;
+            }
+            catch (Exception)
+            {
+                // The response may already be completing; nothing left to abort.
             }
         }
+
+        return (aborted, true);
     }
 
     /// <summary>
@@ -168,22 +238,67 @@ public sealed class StreamSlotTracker
     /// </summary>
     /// <param name="userId">The user.</param>
     /// <param name="deviceId">The device.</param>
-    public void ReleaseDevice(Guid userId, string deviceId)
+    /// <returns>True when a slot was freed.</returns>
+    public bool ReleaseDevice(Guid userId, string deviceId)
     {
         if (!_slots.TryGetValue(userId, out var userSlots))
         {
-            return;
+            return false;
         }
 
         lock (userSlots)
         {
             // Keep slots with responses still streaming: a stop report can race the
             // tail of a download.
-            if (userSlots.TryGetValue(deviceId, out var slot) && slot.InFlight == 0)
+            return userSlots.TryGetValue(deviceId, out var slot)
+                   && slot.InFlight == 0
+                   && userSlots.TryRemove(deviceId, out _);
+        }
+    }
+
+    /// <summary>
+    /// Gets the devices currently holding one of the user's streams: tracked slots plus the
+    /// devices the session manager reports as playing (what the limit is checked against).
+    /// </summary>
+    /// <param name="userId">The user.</param>
+    /// <param name="playingDeviceIds">Device ids currently playing for this user.</param>
+    /// <returns>The distinct device ids (case-insensitive).</returns>
+    public IReadOnlyCollection<string> GetHeldDevices(Guid userId, IReadOnlyCollection<string> playingDeviceIds)
+    {
+        var devices = new HashSet<string>(playingDeviceIds, StringComparer.OrdinalIgnoreCase);
+        if (_slots.TryGetValue(userId, out var userSlots))
+        {
+            lock (userSlots)
             {
-                userSlots.TryRemove(deviceId, out _);
+                PruneUser(userSlots, _clock.GetUtcNow());
+                devices.UnionWith(userSlots.Keys);
             }
         }
+
+        return devices;
+    }
+
+    /// <summary>
+    /// Gets a snapshot of every live slot, for the admin live view.
+    /// </summary>
+    /// <returns>The slots of all users.</returns>
+    public IReadOnlyList<SlotSnapshot> GetSnapshot()
+    {
+        var now = _clock.GetUtcNow();
+        var result = new List<SlotSnapshot>();
+        foreach (var (userId, userSlots) in _slots)
+        {
+            lock (userSlots)
+            {
+                PruneUser(userSlots, now);
+                foreach (var (deviceId, slot) in userSlots)
+                {
+                    result.Add(new SlotSnapshot(userId, deviceId, slot.LastSeenUtc, slot.InFlight));
+                }
+            }
+        }
+
+        return result;
     }
 
     private static int CountHeldSlots(ConcurrentDictionary<string, SlotState> userSlots, IReadOnlyCollection<string> playingDeviceIds)
@@ -227,10 +342,22 @@ public sealed class StreamSlotTracker
         }
     }
 
+    /// <summary>
+    /// A point-in-time copy of one slot.
+    /// </summary>
+    /// <param name="UserId">The user.</param>
+    /// <param name="DeviceId">The device.</param>
+    /// <param name="LastSeenUtc">Last observed media traffic.</param>
+    /// <param name="InFlight">Media responses currently streaming.</param>
+    public sealed record SlotSnapshot(Guid UserId, string DeviceId, DateTimeOffset LastSeenUtc, int InFlight);
+
     private sealed class SlotState
     {
         public DateTimeOffset LastSeenUtc { get; set; }
 
-        public int InFlight { get; set; }
+        // In-flight media responses, each with its abort handle (null when none was given).
+        public Dictionary<object, Action?> Requests { get; } = new(ReferenceEqualityComparer.Instance);
+
+        public int InFlight => Requests.Count;
     }
 }

@@ -34,6 +34,11 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
         BlockUnidentifiedRequests = false;
         ShowLimitPopup = false;
         EnableWebMessage = true;
+        ExemptAdministrators = true;
+        LogBlocksToActivity = true;
+        WebhookUrl = string.Empty;
+        WebhookOnBlock = true;
+        WebhookOnAdminKick = false;
         ConfigVersion = 0;
     }
 
@@ -42,11 +47,50 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
     /// the Jellyfin web client so that a blocked stream shows a single clean custom
     /// message (title + text) instead of the client's built-in "playback not allowed"
     /// dialog. Web clients only (browser, Android webview, iOS web): native apps
-    /// (Swiftfin, etc.) never load the web client and are unaffected. Falls back
-    /// silently to the native dialog if the web files cannot be written.
+    /// (Swiftfin, etc.) never load the web client and are unaffected. The script tag
+    /// is added to index.html on the fly as it is served (nothing is written to the
+    /// web folder), and the setting is read per request: toggling it needs no restart.
     /// </summary>
     [XmlElement(ElementName = "EnableWebMessage")]
     public bool EnableWebMessage { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether administrators are exempt from every
+    /// stream limit (explicit and default). On by default: an admin testing the
+    /// server, or watching on several screens, should never be blocked.
+    /// </summary>
+    [XmlElement(ElementName = "ExemptAdministrators")]
+    public bool ExemptAdministrators { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a blocked stream is recorded in the
+    /// server's activity log (Dashboard > Activity), with the user, device, client
+    /// and IP address. Throttled to one entry per user and device every 5 minutes.
+    /// </summary>
+    [XmlElement(ElementName = "LogBlocksToActivity")]
+    public bool LogBlocksToActivity { get; set; }
+
+    /// <summary>
+    /// Gets or sets the webhook notified of blocked streams: a Discord webhook URL (gets a
+    /// Discord embed) or any other http/https endpoint (gets a generic JSON document, also
+    /// accepted by the Apprise API <c>/notify</c> endpoint). Empty disables webhooks.
+    /// </summary>
+    [XmlElement(ElementName = "WebhookUrl")]
+    public string WebhookUrl { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the webhook is called when a stream is
+    /// blocked (one call per user and device every 5 minutes).
+    /// </summary>
+    [XmlElement(ElementName = "WebhookOnBlock")]
+    public bool WebhookOnBlock { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the webhook is called when an administrator
+    /// stops a stream from the live view.
+    /// </summary>
+    [XmlElement(ElementName = "WebhookOnAdminKick")]
+    public bool WebhookOnAdminKick { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the plugin pushes its own custom

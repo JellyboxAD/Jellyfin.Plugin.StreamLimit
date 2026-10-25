@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using Jellyfin.Plugin.StreamLimit.Configuration;
+using Jellyfin.Plugin.StreamLimit.Notifications;
+using Jellyfin.Plugin.StreamLimit.Web;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
@@ -15,6 +17,8 @@ namespace Jellyfin.Plugin.StreamLimit;
 /// </summary>
 public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
+    private readonly ILogger<Plugin> _logger;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Plugin"/> class.
     /// </summary>
@@ -25,6 +29,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         : base(applicationPaths, xmlSerializer)
     {
         Instance = this;
+        _logger = logger;
         MigrateConfiguration(logger);
     }
 
@@ -68,6 +73,40 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public override string ConfigurationFileName => "Jellyfin.Plugin.StreamLimit.xml";
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Ignores a webhook URL that is not an absolute http/https URL (the configuration page
+    /// already refuses one): the previously stored URL is kept, a single warning is logged,
+    /// and the rest of the configuration is saved normally.
+    /// </remarks>
+    public override void UpdateConfiguration(BasePluginConfiguration configuration)
+    {
+        if (configuration is PluginConfiguration incoming)
+        {
+            var (url, ignored) = WebhookPayloads.SanitizeOnSave(incoming.WebhookUrl, Configuration.WebhookUrl);
+            if (ignored)
+            {
+                // Scheme only: the rejected value could still contain a secret.
+                _logger.LogWarning(
+                    "StreamLimit: ignored invalid webhook URL (scheme: {Scheme}); keeping the previous one",
+                    WebhookPayloads.DescribeScheme(incoming.WebhookUrl));
+            }
+
+            incoming.WebhookUrl = url;
+        }
+
+        base.UpdateConfiguration(configuration);
+    }
+
+    /// <inheritdoc />
+    public override void OnUninstalling()
+    {
+        // Leave the web client exactly as Jellyfin installed it: remove the tag that
+        // versions up to 1.1.0.1 wrote into index.html on disk (no-op otherwise).
+        WebInjectionService.RemoveLegacyBlock(ApplicationPaths.WebPath, _logger);
+        base.OnUninstalling();
+    }
+
+    /// <inheritdoc />
     public IEnumerable<PluginPageInfo> GetPages()
     {
         return new[]
@@ -75,6 +114,12 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             new PluginPageInfo
             {
                 Name = Name,
+
+                // Sidebar entry in the dashboard: jellyfin-web labels it with DisplayName
+                // (empty without it) and draws MenuIcon as a Material icon.
+                EnableInMainMenu = true,
+                DisplayName = "Stream Limiter",
+                MenuIcon = "block",
                 EmbeddedResourcePath = string.Format(CultureInfo.InvariantCulture, "{0}.Configuration.configPage.html", GetType().Namespace),
             },
         };

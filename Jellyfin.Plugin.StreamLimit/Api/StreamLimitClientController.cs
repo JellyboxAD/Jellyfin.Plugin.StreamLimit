@@ -23,9 +23,15 @@ public class StreamLimitClientController : ControllerBase
     [Produces("application/javascript")]
     public IActionResult GetInjectScript()
     {
+        // The fallback wording, used when a block response carries no per-block message
+        // headers: placeholders render empty here, the real values come with each block.
         var configuration = Plugin.Instance?.Configuration;
-        var titleJson = JsonSerializer.Serialize(configuration?.ResolvedMessageTitle ?? Configuration.PluginConfiguration.DefaultMessageTitle);
-        var textJson = JsonSerializer.Serialize(configuration?.ResolvedMessageText ?? Configuration.PluginConfiguration.DefaultMessageText);
+        var titleJson = JsonSerializer.Serialize(MessageTemplate.Render(
+            configuration?.ResolvedMessageTitle ?? Configuration.PluginConfiguration.DefaultMessageTitle,
+            MessageValues.Empty));
+        var textJson = JsonSerializer.Serialize(MessageTemplate.Render(
+            configuration?.ResolvedMessageText ?? Configuration.PluginConfiguration.DefaultMessageText,
+            MessageValues.Empty));
 
         // Don't cache: the message must reflect config changes without a hard reload.
         Response.Headers["Cache-Control"] = "no-store";
@@ -36,9 +42,12 @@ public class StreamLimitClientController : ControllerBase
     {
         // Injected global JS. jellyfin-web keeps its playback manager and its `alert`
         // module private (ES modules), so we cannot patch them. Instead we:
-        //  1. patch XMLHttpRequest to detect our block (the PlaybackInfo POST goes
-        //     through axios/XHR; we also tag every block response with X-StreamLimit),
-        //  2. show one custom modal, and
+        //  1. patch XMLHttpRequest and window.fetch to detect our block (the PlaybackInfo
+        //     POST goes through axios/XHR in older web builds, fetch in newer ones; we
+        //     also tag every block response with X-StreamLimit),
+        //  2. show one custom modal above everything (incl. the buffering spinner), with
+        //     the block's own wording (placeholders resolved by the server) from the
+        //     X-StreamLimit-Title / X-StreamLimit-Message headers when present, and
         //  3. run a short-lived MutationObserver that removes the native
         //     "Playback Error" dialog that jellyfin-web pops right after.
         // Raw string with $$ interpolation: single JS braces stay literal, only
@@ -50,7 +59,13 @@ public class StreamLimitClientController : ControllerBase
   var suppressUntil = 0;
   var lastShown = 0;
 
-  function showModal() {
+  // Header values are percent-encoded UTF-8; absent or undecodable -> null.
+  function decodeHeader(value) {
+    if (value === null || value === undefined || value === '') { return null; }
+    try { return decodeURIComponent(value); } catch (e) { return null; }
+  }
+
+  function showModal(title, text) {
     var now = Date.now();
     // One popup per attempt: several requests (PlaybackInfo + follow-ups) can be
     // blocked in a burst; collapse them, and never stack two modals.
@@ -59,14 +74,14 @@ public class StreamLimitClientController : ControllerBase
     try {
       var overlay = document.createElement('div');
       overlay.id = 'streamlimit-modal';
-      overlay.setAttribute('style', 'position:fixed;inset:0;z-index:1000000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);');
+      overlay.setAttribute('style', 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);');
       var box = document.createElement('div');
       box.setAttribute('style', 'max-width:90vw;width:420px;background:#101010;color:#fff;border-radius:8px;padding:24px;box-shadow:0 8px 40px rgba(0,0,0,.5);font-family:inherit;');
       var h = document.createElement('h2');
-      h.textContent = TITLE;
+      h.textContent = title !== null && title !== undefined ? title : TITLE;
       h.setAttribute('style', 'margin:0 0 12px;font-size:1.2em;');
       var p = document.createElement('div');
-      p.textContent = TEXT;
+      p.textContent = text !== null && text !== undefined ? text : TEXT;
       p.setAttribute('style', 'margin:0 0 20px;opacity:.9;line-height:1.4;');
       var btn = document.createElement('button');
       btn.textContent = 'OK';
@@ -99,9 +114,19 @@ public class StreamLimitClientController : ControllerBase
     }
   }
 
-  function trigger() {
+  // Newer jellyfin-web keeps its full-screen buffering spinner (.docspinner, z-index
+  // 9999999) up after a refused playback; hide it so the page is usable again.
+  function hideSpinner() {
+    try {
+      var spinners = document.querySelectorAll('.docspinner.mdlSpinnerActive');
+      for (var i = 0; i < spinners.length; i++) { spinners[i].classList.remove('mdlSpinnerActive'); }
+    } catch (e) { /* noop */ }
+  }
+
+  function trigger(title, text) {
     suppressUntil = Date.now() + 6000;
-    showModal();
+    showModal(title, text);
+    hideSpinner();
     sweepDialogs();
   }
 
@@ -122,17 +147,47 @@ public class StreamLimitClientController : ControllerBase
       var xhr = this;
       xhr.addEventListener('load', function () {
         try {
-          var blocked = false;
-          if (xhr.getResponseHeader && xhr.getResponseHeader('X-StreamLimit')) { blocked = true; }
-          if (!blocked && /\/PlaybackInfo/i.test(xhr.__slUrl || '')) {
-            var body = JSON.parse(xhr.responseText || '{}');
-            if (body && body.ErrorCode === 'NotAllowed') { blocked = true; }
+          if (xhr.getResponseHeader && xhr.getResponseHeader('X-StreamLimit')) {
+            trigger(decodeHeader(xhr.getResponseHeader('X-StreamLimit-Title')), decodeHeader(xhr.getResponseHeader('X-StreamLimit-Message')));
+            return;
           }
-          if (blocked) { trigger(); }
+          if (/\/PlaybackInfo/i.test(xhr.__slUrl || '')) {
+            var body = JSON.parse(xhr.responseText || '{}');
+            if (body && body.ErrorCode === 'NotAllowed') { trigger(null, null); }
+          }
         } catch (e) { /* noop */ }
       });
       return send.apply(this, arguments);
     };
+  } catch (e) { /* noop */ }
+
+  // Same detection for fetch(). The check runs on a clone, detached from the page's
+  // promise chain: the caller always gets the original response (or rejection).
+  try {
+    if (typeof window.fetch === 'function') {
+      var origFetch = window.fetch;
+      window.fetch = function (input, init) {
+        var promise = origFetch.apply(this, arguments);
+        try {
+          var url = typeof input === 'string' ? input : ((input && input.url) || String(input || ''));
+          promise.then(function (res) {
+            try {
+              if (!res || !res.headers) { return; }
+              if (res.headers.get('X-StreamLimit')) {
+                trigger(decodeHeader(res.headers.get('X-StreamLimit-Title')), decodeHeader(res.headers.get('X-StreamLimit-Message')));
+                return;
+              }
+              if (/\/PlaybackInfo/i.test(url)) {
+                res.clone().json().then(function (body) {
+                  if (body && body.ErrorCode === 'NotAllowed') { trigger(null, null); }
+                }, function () { /* noop */ });
+              }
+            } catch (e) { /* noop */ }
+          }, function () { /* noop */ });
+        } catch (e) { /* noop */ }
+        return promise;
+      };
+    }
   } catch (e) { /* noop */ }
 })();
 """;

@@ -1,6 +1,6 @@
 name: "StreamLimit"
 guid: "d98fbe02-daf3-4c09-a832-4b4e1d07326c"
-version: "1.1.0.1"
+version: "1.1.0.2"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Stream Limiter"
@@ -11,6 +11,21 @@ timestamp: "2026-07-17T00:00:00Z"
 artifacts:
   - "Jellyfin.Plugin.StreamLimit.dll"
 changelog: |-
+
+  ### [v1.1.0.2]
+  - NEW: administrators are exempt from stream limits by default ("Exempt administrators", can be turned off)
+  - NEW: "Stream Limiter" entry in the dashboard sidebar
+  - NEW: live view of the counted streams on the settings page, with Stop / Stop + log out buttons: immediate, also cuts downloads in progress (recorded in the activity log)
+  - NEW: webhook notifications when a stream is blocked (and optionally when an admin stops one): Discord, Apprise or any JSON endpoint, with a "Send test" button (issue #7)
+  - NEW: placeholders in the blocked message: {{user}}, {{active}}, {{limit}}, {{devices}} (web popup and server message)
+  - NEW: blocked streams are recorded in Dashboard > Activity with user, device, client and IP (one entry per user and device every 5 minutes; can be turned off) (issue #7)
+  - Custom web message is now added to the web client as it is served instead of editing index.html on disk: works with read-only web folders, survives web updates, toggling it needs no restart, and plugin updates are picked up without stale cached scripts (also in Android webviews). The tag written on disk by older versions is removed automatically (and on uninstall)
+  - Custom web message now shows above the buffering spinner of newer jellyfin-web versions, which is dismissed, and also detects blocks on fetch() requests
+  - Fixed users locked out after a stop by clients that keep their session alive (AFinity progress reports, Swiftfin without a stopped report, jellyfin-android native player): a stopped device no longer counts for up to 10 minutes
+  - Sessions that cannot receive the stop command are now stopped server side
+  - Hard block now also identifies requests using legacy token headers (X-Emby-Token, X-MediaBrowser-Token, X-Emby-Authorization, Emby scheme), ignored by Jellyfin 12 by default
+  - A deleted user's limit is removed from the configuration
+  - Jellyfin 12 build: compatible with Jellyfin 12.0 to 12.3
 
   ### [v1.1.0.1]
   - Fixed plugin failing to load on Jellyfin 10.11.0-10.11.10 ("incompatible version of one of the shared libraries", issue #19): now built against Jellyfin 10.11.0 instead of the latest 10.11.x

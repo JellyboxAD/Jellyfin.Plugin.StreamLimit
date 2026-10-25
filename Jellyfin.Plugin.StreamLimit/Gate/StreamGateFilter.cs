@@ -1,12 +1,11 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Claims;
-using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Queries;
 using Jellyfin.Plugin.StreamLimit.Configuration;
+using Jellyfin.Plugin.StreamLimit.Notifications;
 using MediaBrowser.Controller.Devices;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
@@ -36,21 +35,29 @@ namespace Jellyfin.Plugin.StreamLimit.Gate;
 /// </remarks>
 public sealed class StreamGateFilter : IAsyncResourceFilter
 {
-    private static readonly TimeSpan NotifyThrottle = TimeSpan.FromSeconds(30);
-
     private readonly StreamSlotTracker _tracker;
+    private readonly EnforcedDeviceRegistry _enforcedDevices;
+    private readonly BlockActivityLogger _activityLogger;
+    private readonly WebhookNotifier _webhookNotifier;
+    private readonly StreamEnforcer _enforcer;
+    private readonly IUserManager _userManager;
     private readonly StreamLimitManager _limitManager;
     private readonly ISessionManager _sessionManager;
     private readonly IAuthorizationContext _authorizationContext;
     private readonly IDeviceManager _deviceManager;
     private readonly ILibraryManager _libraryManager;
     private readonly ILogger<StreamGateFilter> _logger;
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _lastNotified = new(StringComparer.OrdinalIgnoreCase);
+    private readonly KeyedThrottle _notifyThrottle = new(TimeSpan.FromSeconds(30));
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StreamGateFilter"/> class.
     /// </summary>
     /// <param name="tracker">The slot tracker.</param>
+    /// <param name="enforcedDevices">The devices the reactive limiter just stopped.</param>
+    /// <param name="activityLogger">The activity log writer for blocked streams.</param>
+    /// <param name="webhookNotifier">The webhook notifier.</param>
+    /// <param name="enforcer">The shared stop actions (display message).</param>
+    /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
     /// <param name="limitManager">The stream limit manager.</param>
     /// <param name="sessionManager">Instance of the <see cref="ISessionManager"/> interface.</param>
     /// <param name="authorizationContext">Instance of the <see cref="IAuthorizationContext"/> interface.</param>
@@ -59,6 +66,11 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
     /// <param name="logger">The logger.</param>
     public StreamGateFilter(
         StreamSlotTracker tracker,
+        EnforcedDeviceRegistry enforcedDevices,
+        BlockActivityLogger activityLogger,
+        WebhookNotifier webhookNotifier,
+        StreamEnforcer enforcer,
+        IUserManager userManager,
         StreamLimitManager limitManager,
         ISessionManager sessionManager,
         IAuthorizationContext authorizationContext,
@@ -67,6 +79,11 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
         ILogger<StreamGateFilter> logger)
     {
         _tracker = tracker;
+        _enforcedDevices = enforcedDevices;
+        _activityLogger = activityLogger;
+        _webhookNotifier = webhookNotifier;
+        _enforcer = enforcer;
+        _userManager = userManager;
         _limitManager = limitManager;
         _sessionManager = sessionManager;
         _authorizationContext = authorizationContext;
@@ -111,7 +128,9 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
                 if (kind == GateKind.MediaBytes && configuration.BlockUnidentifiedRequests)
                 {
                     _logger.LogInformation("Stream gate denied unidentified media request on {Path}", context.HttpContext.Request.Path);
-                    context.Result = new ObjectResult(new { Message = GetDenialMessage() }) { StatusCode = StatusCodes.Status403Forbidden };
+                    var unidentified = RenderMessage(MessageValues.Empty);
+                    TagBlockedResponse(context.HttpContext, unidentified);
+                    context.Result = Forbidden(unidentified.Text);
                     return;
                 }
 
@@ -150,9 +169,8 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
                 userId,
                 deviceId,
                 limit);
-            NotifyDeviceThrottled(userId, deviceId);
-            TagBlockedResponse(context);
-            context.Result = CreateStartupDenialResult(descriptor!.ActionName);
+            var negotiationBlock = ReportBlocked(context.HttpContext, userId, deviceId, limit, playingDeviceIds);
+            context.Result = CreateStartupDenialResult(descriptor!.ActionName, negotiationBlock.Text);
             return;
         }
 
@@ -164,33 +182,90 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
                 deviceId,
                 limit,
                 descriptor!.ActionName);
-            NotifyDeviceThrottled(userId, deviceId);
-            TagBlockedResponse(context);
-            context.Result = new ObjectResult(new { Message = GetDenialMessage() }) { StatusCode = StatusCodes.Status403Forbidden };
+            var mediaBlock = ReportBlocked(context.HttpContext, userId, deviceId, limit, playingDeviceIds);
+            context.Result = Forbidden(mediaBlock.Text);
             return;
         }
 
+        // Admitted: if the reactive limiter stopped this device earlier, it is now a
+        // legitimate stream again and its session must count normally.
+        _enforcedDevices.ClearOnReentry(userId, deviceId);
+
         // Hold the slot for the whole response: a direct-play download is a single
         // request that can last hours and must keep counting the entire time.
-        _tracker.BeginRequest(userId, deviceId);
+        // The abort handle lets an admin kick cut this response immediately.
+        var registration = _tracker.BeginRequest(userId, deviceId, context.HttpContext.Abort);
         try
         {
             await next().ConfigureAwait(false);
         }
         finally
         {
-            _tracker.EndRequest(userId, deviceId);
+            _tracker.EndRequest(userId, deviceId, registration);
         }
     }
 
-    private static void TagBlockedResponse(ResourceExecutingContext context)
+    /// <summary>
+    /// The response headers carrying a block's resolved message: percent-encoded UTF-8
+    /// (<c>decodeURIComponent</c> in the web script), since header values must be ASCII.
+    /// </summary>
+    public const string TitleHeader = "X-StreamLimit-Title";
+
+    /// <summary>
+    /// See <see cref="TitleHeader"/>.
+    /// </summary>
+    public const string MessageHeader = "X-StreamLimit-Message";
+
+    private static void TagBlockedResponse(HttpContext httpContext, (string Title, string Text) message)
     {
         // Lets the injected web script reliably recognize our block on any response
-        // (headers are readable via XHR getResponseHeader on same-origin requests).
-        context.HttpContext.Response.Headers["X-StreamLimit"] = "1";
+        // and show this block's resolved wording.
+        var headers = httpContext.Response.Headers;
+        headers["X-StreamLimit"] = "1";
+        headers[TitleHeader] = Uri.EscapeDataString(message.Title);
+        headers[MessageHeader] = Uri.EscapeDataString(message.Text);
+
+        // Jellyfin's CORS policy exposes no headers, so a web client served from another
+        // origin could not read ours. Expose them on cross-origin requests; merged at
+        // response start so a value set later in the pipeline is kept.
+        if (!string.IsNullOrEmpty(httpContext.Request.Headers.Origin))
+        {
+            httpContext.Response.OnStarting(
+                static state =>
+                {
+                    var response = (HttpResponse)state;
+                    response.Headers.AccessControlExposeHeaders = MergeExposedHeaders(response.Headers.AccessControlExposeHeaders.ToString());
+                    return Task.CompletedTask;
+                },
+                httpContext.Response);
+        }
     }
 
-    private IActionResult CreateStartupDenialResult(string actionName)
+    /// <summary>
+    /// Adds the plugin's headers to an <c>Access-Control-Expose-Headers</c> value.
+    /// </summary>
+    /// <param name="existing">The current value, may be empty.</param>
+    /// <returns>The merged value.</returns>
+    public static string MergeExposedHeaders(string? existing)
+    {
+        var names = (existing ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        foreach (var name in new[] { "X-StreamLimit", TitleHeader, MessageHeader })
+        {
+            if (!names.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                names.Add(name);
+            }
+        }
+
+        return string.Join(", ", names);
+    }
+
+    private static ObjectResult Forbidden(string text)
+        => new(new { Message = text }) { StatusCode = StatusCodes.Status403Forbidden };
+
+    private static IActionResult CreateStartupDenialResult(string actionName, string text)
     {
         // PlaybackInfo callers understand a typed error response and show a proper
         // "playback not allowed" dialog; other negotiation endpoints get a plain 403.
@@ -203,7 +278,7 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
             });
         }
 
-        return new ObjectResult(new { Message = GetDenialMessage() }) { StatusCode = StatusCodes.Status403Forbidden };
+        return Forbidden(text);
     }
 
     private static string? GetClaim(ClaimsPrincipal? principal, string type)
@@ -237,11 +312,12 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
             return (authorizationInfo.UserId, NormalizeDeviceId(httpContext, authorizationInfo.DeviceId));
         }
 
-        // 3. Legacy ?api_key= tokens are ignored by the resolver on Jellyfin 12
-        //    (EnableLegacyAuthorization defaults to false there), but the token still
-        //    identifies a device: look it up directly so those URLs stay gated.
-        var token = httpContext.Request.Query["api_key"].FirstOrDefault()
-                    ?? httpContext.Request.Query["ApiKey"].FirstOrDefault();
+        // 3. Legacy token carriers (X-Emby-Token, X-MediaBrowser-Token, the Emby
+        //    authorization scheme, X-Emby-Authorization, ?api_key=) are ignored by the
+        //    resolver on Jellyfin 12 (EnableLegacyAuthorization defaults to false there),
+        //    but the token still identifies a device: look it up directly so those
+        //    requests stay gated.
+        var token = RequestTokens.Find(httpContext.Request.Headers, httpContext.Request.Query);
         if (!string.IsNullOrEmpty(token))
         {
             var device = _deviceManager.GetDevices(new DeviceQuery { AccessToken = token }).Items.FirstOrDefault();
@@ -288,14 +364,73 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
         }
     }
 
-    // Devices with live HTTP traffic are covered by the tracker regardless.
+    // Devices with live HTTP traffic are covered by the tracker regardless. Devices the
+    // reactive limiter just stopped are left out: their client may keep a zombie
+    // session alive (progress reports after Stop, no stopped report on error).
     private IReadOnlyCollection<string> GetPlayingDeviceIds(Guid userId)
-        => PlayingSessions.GetPlayingDeviceIds(_sessionManager.Sessions, userId, DateTime.UtcNow);
+        => PlayingSessions.GetPlayingDeviceIds(
+            _sessionManager.Sessions,
+            userId,
+            DateTime.UtcNow,
+            s => _enforcedDevices.IsEnforced(userId, PlayingSessions.StreamKey(s)));
 
-    private static string GetDenialMessage()
-        => Plugin.Instance?.Configuration.ResolvedMessageText ?? PluginConfiguration.DefaultMessageText;
+    private static (string Title, string Text) RenderMessage(MessageValues values)
+    {
+        var configuration = Plugin.Instance?.Configuration;
+        return (
+            MessageTemplate.Render(configuration?.ResolvedMessageTitle ?? PluginConfiguration.DefaultMessageTitle, values),
+            MessageTemplate.Render(configuration?.ResolvedMessageText ?? PluginConfiguration.DefaultMessageText, values));
+    }
 
-    private void NotifyDeviceThrottled(Guid userId, string deviceId)
+    // Everything a denial does besides answering: resolve the message for this block, tag
+    // the response, and (throttled) push the display message, the activity entry and the
+    // webhook. Never throws: the denial itself must always go out.
+    private (string Title, string Text) ReportBlocked(
+        HttpContext httpContext,
+        Guid userId,
+        string deviceId,
+        int limit,
+        IReadOnlyCollection<string> playingDeviceIds)
+    {
+        var message = RenderMessage(MessageValues.Empty);
+        try
+        {
+            var userSessions = _sessionManager.Sessions.Where(s => s.UserId.Equals(userId)).ToList();
+            var session = userSessions.FirstOrDefault(s => string.Equals(s.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase));
+            var otherDevices = _tracker.GetHeldDevices(userId, playingDeviceIds)
+                .Where(id => !string.Equals(id, deviceId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // The session (when the device has one) knows the friendly device name and
+            // client; the token's claims are the fallback for anonymous media requests.
+            var blocked = new BlockedStream(
+                userId,
+                session?.UserName ?? userSessions.Select(s => s.UserName).FirstOrDefault(n => !string.IsNullOrEmpty(n)) ?? _userManager.GetUserById(userId)?.Username,
+                deviceId,
+                session?.DeviceName ?? GetClaim(httpContext.User, "Jellyfin-Device"),
+                session?.Client ?? GetClaim(httpContext.User, "Jellyfin-Client"),
+                httpContext.Connection.RemoteIpAddress?.ToString() ?? session?.RemoteEndPoint,
+                limit,
+                "HTTP gate",
+                otherDevices.Count,
+                MessageTemplate.DescribeDevices(otherDevices, userSessions));
+
+            message = RenderMessage(blocked.MessageValues);
+            NotifyDeviceThrottled(userId, deviceId, message);
+            _activityLogger.LogBlocked(blocked);
+
+            _webhookNotifier.NotifyBlocked(blocked);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Stream gate could not report the block");
+        }
+
+        TagBlockedResponse(httpContext, message);
+        return message;
+    }
+
+    private void NotifyDeviceThrottled(Guid userId, string deviceId, (string Title, string Text) message)
     {
         // Off by default: the client already shows its own "not allowed" dialog on a
         // hard block, so an extra popup is redundant. See PluginConfiguration.ShowLimitPopup.
@@ -304,27 +439,10 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
             return;
         }
 
-        var key = StreamLimitStore.NormalizeUserKey(userId) + "|" + deviceId;
-        var now = DateTimeOffset.UtcNow;
-        var last = _lastNotified.GetOrAdd(key, DateTimeOffset.MinValue);
-        if (now - last < NotifyThrottle || !_lastNotified.TryUpdate(key, now, last))
+        if (!_notifyThrottle.TryAcquire(KeyedThrottle.UserDeviceKey(userId, deviceId)))
         {
             return;
         }
-
-        // Opportunistic pruning keeps the throttle map from growing forever on
-        // servers with many rotating browser device ids.
-        foreach (var (staleKey, seenAt) in _lastNotified)
-        {
-            if (now - seenAt > TimeSpan.FromMinutes(10))
-            {
-                _lastNotified.TryRemove(staleKey, out _);
-            }
-        }
-
-        var configuration = Plugin.Instance?.Configuration;
-        var title = configuration?.ResolvedMessageTitle ?? PluginConfiguration.DefaultMessageTitle;
-        var text = configuration?.ResolvedMessageText ?? PluginConfiguration.DefaultMessageText;
 
         var sessions = _sessionManager.Sessions
             .Where(s => s.UserId.Equals(userId)
@@ -336,22 +454,7 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
         {
             foreach (var session in sessions)
             {
-                try
-                {
-                    await _sessionManager.SendMessageCommand(
-                        session.Id,
-                        session.Id,
-                        new MessageCommand
-                        {
-                            Header = title,
-                            Text = text,
-                        },
-                        CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Failed to notify session {SessionId} about the stream limit", session.Id);
-                }
+                await _enforcer.SendMessageAsync(session, message.Title, message.Text, "gate").ConfigureAwait(false);
             }
         });
     }

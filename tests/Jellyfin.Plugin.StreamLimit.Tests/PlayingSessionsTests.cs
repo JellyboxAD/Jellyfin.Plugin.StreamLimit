@@ -55,6 +55,18 @@ public class PlayingSessionsTests
     }
 
     [Fact]
+    public void ExcludedSessions_AreNotCounted()
+    {
+        var zombie = Playing("afinity", Now);
+        var noDevice = Playing(string.Empty, Now);
+        var live = Playing("phone", Now);
+        bool Excluded(SessionInfo s) => PlayingSessions.StreamKey(s) == "afinity" || s.Id == noDevice.Id;
+
+        Assert.Equal(["phone"], PlayingSessions.GetPlayingDeviceIds([zombie, noDevice, live], User, Now, Excluded));
+        Assert.Equal(["phone"], PlayingSessions.GetPlayingStreamKeys([zombie, noDevice, live], User, Now, Excluded));
+    }
+
+    [Fact]
     public void StreamKeys_CountDevicelessSessionsBySessionId()
     {
         var tv = Playing("tv", Now);

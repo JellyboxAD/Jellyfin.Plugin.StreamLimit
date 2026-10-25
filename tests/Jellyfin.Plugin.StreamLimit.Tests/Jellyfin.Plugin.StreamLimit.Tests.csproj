@@ -5,12 +5,17 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Same default as the plugin; pass -p:JellyfinVersion=... to test another line. -->
+    <JellyfinVersion Condition="'$(JellyfinVersion)' == ''">10.11.0</JellyfinVersion>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.*" />
     <PackageReference Include="xunit" Version="2.*" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.*" PrivateAssets="all" />
+    <!-- The plugin compiles against Jellyfin without its runtime assets (the server ships them);
+         the tests run outside a server, so they bring the same assemblies themselves. -->
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" />
   </ItemGroup>
 
   <ItemGroup>
