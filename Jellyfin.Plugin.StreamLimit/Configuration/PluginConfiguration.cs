@@ -33,6 +33,7 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
         BlockPlaybackInfo = true;
         BlockUnidentifiedRequests = false;
         ShowLimitPopup = false;
+        NotifyNativeApps = true;
         EnableWebMessage = true;
         ExemptAdministrators = true;
         LogBlocksToActivity = true;
@@ -93,16 +94,26 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
     public bool WebhookOnAdminKick { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the plugin pushes its own custom
-    /// popup (title + text) when a stream is blocked. Off by default: a hard block
-    /// already makes the client show its own "playback not allowed" dialog, which a
-    /// plugin cannot suppress, so pushing an extra popup only adds a redundant second
-    /// dialog on the web-based clients that receive it (native clients drop it). Turn
-    /// this on only if you specifically want your custom wording on top of the
-    /// client's own dialog.
+    /// Gets or sets a value indicating whether the server message (title + text) of a block
+    /// is also sent to web-based clients (jellyfin-web, the jellyfin-android and jellyfin-ios
+    /// apps). Off by default: those clients already show the injected custom popup
+    /// (<see cref="EnableWebMessage"/>) or their own "playback not allowed" dialog, so the
+    /// server message would only add a redundant second dialog there. Native apps are covered
+    /// by <see cref="NotifyNativeApps"/>.
     /// </summary>
     [XmlElement(ElementName = "ShowLimitPopup")]
     public bool ShowLimitPopup { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the server message (title + text, placeholders
+    /// resolved) of a block is sent to native apps (Android TV, Swiftfin, Streamyfin, Findroid,
+    /// AFinity, Kodi...), shown as a 10 second notice. On by default: native apps cannot run the
+    /// injected web popup, and without a message a blocked user only sees an endless spinner.
+    /// Also routes the message to the web UI of the jellyfin-android app when its native player
+    /// is blocked. Throttled to one message per user and device every 30 seconds.
+    /// </summary>
+    [XmlElement(ElementName = "NotifyNativeApps")]
+    public bool NotifyNativeApps { get; set; }
 
     /// <summary>
     /// Gets or sets the schema version of this configuration. 0 means "pre-1.1 or

@@ -1,6 +1,6 @@
 name: "StreamLimit"
 guid: "d98fbe02-daf3-4c09-a832-4b4e1d07326c"
-version: "1.1.0.2"
+version: "1.1.0.3"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Stream Limiter"
@@ -11,6 +11,17 @@ timestamp: "2026-07-17T00:00:00Z"
 artifacts:
   - "Jellyfin.Plugin.StreamLimit.dll"
 changelog: |-
+
+  ### [v1.1.0.3]
+  - Fixed "ghost" streams: users shown with (and blocked by) streams they no longer had, even while not connected. Streams now count by real activity — Jellyfin playback reports and bytes actually sent — instead of open connections: a media connection left open without sending anything (phone asleep or offline, app killed, a server-side segment wait the client gave up on) stops counting after 90 s and is cut after 30 minutes; ended or client-aborted requests never count
+  - Fixed a stop report or session end not freeing the slot of a device that still had idle open connections
+  - Fixed playback negotiation (PlaybackInfo) refusing a stream the media request itself would have allowed (abandoned slots of a closed tab)
+  - Slots, stopped devices, play-session ids and throttles are now cleaned up every minute, also for users who never come back
+  - NEW: your blocked message is sent to native apps by default (Android TV, Swiftfin, Streamyfin, AFinity, Findroid…), as a 10 s notice, instead of an endless spinner ("Show my message on native apps", on); when the jellyfin-android native player is blocked, the message goes to the app's web UI. "Also push a server message" now only adds it on web clients
+  - NEW: "Reset" button per user in the live view: releases all of the user's slots and stopped devices (last-resort fix)
+  - Clearer live view: only what is counted (plus devices the plugin stopped), with the reason (playing, streaming, recent, stopped), idle time and open connections
+  - Admin stop now reports live responses cut separately from stale registrations cleared
+  - Redesigned settings page
 
   ### [v1.1.0.2]
   - NEW: administrators are exempt from stream limits by default ("Exempt administrators", can be turned off)

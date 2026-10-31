@@ -3,225 +3,566 @@
 <head>
     <meta charset="utf-8">
     <title>Stream Limiter</title>
-    <style>
-        .slSection { margin-bottom: 2em; }
-        .slBadge {
-            display: inline-block;
-            font-size: 0.7em;
-            font-weight: 700;
-            letter-spacing: 0.05em;
-            vertical-align: middle;
-            padding: 0.15em 0.5em;
-            margin-left: 0.6em;
-            border-radius: 0.75em;
-            background: #cc7b19;
-            color: #fff;
-        }
-        .slLead {
-            margin: 0.2em 0 1.2em;
-            opacity: 0.85;
-            line-height: 1.5;
-        }
-        .slNote {
-            border-left: 3px solid #00a4dc;
-            padding: 0.6em 0.9em;
-            margin: 1em 0;
-            background: rgba(0, 164, 220, 0.08);
-            line-height: 1.5;
-        }
-        .slNote.slBeta { border-left-color: #cc7b19; background: rgba(204, 123, 25, 0.08); }
-        .slSub { margin: 1.2em 0 0.4em; font-weight: 600; opacity: 0.9; }
-        .slTableWrap { overflow-x: auto; }
-        .slTable { width: 100%; border-collapse: collapse; font-size: 0.9em; }
-        .slTable th, .slTable td { text-align: left; padding: 0.45em 0.6em; border-bottom: 1px solid rgba(128, 128, 128, 0.25); vertical-align: middle; }
-        .slTable th { font-weight: 600; opacity: 0.8; white-space: nowrap; }
-        .slTable td.slActions { white-space: nowrap; text-align: right; }
-        .slTable .emby-button { margin: 0 0 0 0.4em; padding: 0.3em 0.8em; font-size: 0.9em; }
-        .slUserRow td { font-weight: 600; background: rgba(128, 128, 128, 0.08); }
-        .slMuted { opacity: 0.65; }
-        .slTag { display: inline-block; font-size: 0.75em; padding: 0.1em 0.5em; margin-left: 0.4em; border-radius: 0.75em; background: rgba(128, 128, 128, 0.3); }
-        .slStatus { margin: 0.6em 0 0; min-height: 1.4em; opacity: 0.85; }
-        .slInline { display: flex; gap: 0.8em; align-items: flex-end; flex-wrap: wrap; }
-        .slInline .inputContainer { flex: 1 1 20em; margin-bottom: 0; }
-    </style>
 </head>
 <body>
     <div id="StreamLimiterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
+        <!-- The style lives inside the page element: jellyfin-web only keeps div[data-role="page"]
+             of a plugin page, so a <style> in <head> is dropped. Every class is prefixed sl-,
+             and colours come from the theme (inherit, rgba overlays, Jellyfin CSS variables with
+             fallbacks) so the page works on every theme. -->
+        <style>
+            /* Let the save bar stick to the viewport: the dashboard sets overflow:hidden on this
+               wrapper, which would turn it into the sticky container. clip keeps the clipping
+               without creating a scroll container; older browsers ignore it (bar is then static). */
+            #StreamLimiterConfigPage > [data-role="content"] { overflow: clip; }
+
+            #StreamLimiterConfigPage .sl-header { margin: 0 0 0.6em; }
+            #StreamLimiterConfigPage .sl-title { margin-bottom: 0.15em; }
+            #StreamLimiterConfigPage .sl-summary { margin: 0; min-height: 1.4em; }
+            #StreamLimiterConfigPage .sl-summary strong { font-weight: 600; color: var(--jf-palette-text-primary, inherit); }
+
+            /* ---- tabs ---- */
+            #StreamLimiterConfigPage .sl-tabs {
+                display: flex;
+                overflow-x: auto;
+                scrollbar-width: none;
+                margin: 0 0 1.6em;
+                border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+            }
+            #StreamLimiterConfigPage .sl-tabs::-webkit-scrollbar { display: none; }
+            #StreamLimiterConfigPage .sl-tab {
+                padding: 0.9em 1.1em 0.75em;
+                border-bottom: 3px solid transparent;
+                white-space: nowrap;
+                font-size: 0.95em;
+            }
+            #StreamLimiterConfigPage .sl-tab[aria-selected="true"] { border-bottom-color: var(--jf-palette-primary-main, #00a4dc); }
+            #StreamLimiterConfigPage .sl-tab:focus-visible { outline: 2px solid currentColor; outline-offset: -4px; }
+            #StreamLimiterConfigPage .sl-tabDot {
+                display: none;
+                width: 0.45em;
+                height: 0.45em;
+                margin-left: 0.4em;
+                border-radius: 50%;
+                vertical-align: 0.15em;
+                background: var(--jf-palette-primary-main, #00a4dc);
+            }
+            #StreamLimiterConfigPage .sl-tab.sl-isDirty .sl-tabDot { display: inline-block; }
+            /* emby-button and other display rules would otherwise override the hidden attribute. */
+            #StreamLimiterConfigPage [hidden] { display: none !important; }
+
+            /* ---- shared ---- */
+            #StreamLimiterConfigPage .sl-lead { margin: 0 0 1.4em; line-height: 1.5; max-width: 46em; }
+            #StreamLimiterConfigPage .sl-group { margin: 0 0 2.2em; }
+            #StreamLimiterConfigPage .sl-groupTitle { font-size: 1.05em; font-weight: 600; margin: 0 0 0.25em; }
+            #StreamLimiterConfigPage .sl-groupLead { margin: 0 0 1em; }
+            #StreamLimiterConfigPage .sl-muted { opacity: 0.7; }
+            #StreamLimiterConfigPage .sl-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.6em 1em; }
+            #StreamLimiterConfigPage .sl-row > .inputContainer { flex: 1 1 16em; margin-bottom: 0; }
+            #StreamLimiterConfigPage .sl-row > .emby-button { margin: 0; }
+            #StreamLimiterConfigPage .sl-btnSmall { margin: 0; padding: 0.45em 0.9em; font-size: 0.9em; }
+            #StreamLimiterConfigPage .sl-msg { margin: 0.6em 0 0; min-height: 1.4em; line-height: 1.4; }
+            #StreamLimiterConfigPage .sl-msg:empty { min-height: 0; margin: 0; }
+            #StreamLimiterConfigPage .sl-msg-error { color: var(--jf-palette-error-main, #c62828); font-weight: 600; }
+            #StreamLimiterConfigPage .sl-msg-ok { color: var(--jf-palette-success-main, #2e7d32); font-weight: 600; }
+            #StreamLimiterConfigPage .sl-note {
+                border-left: 3px solid rgba(128, 128, 128, 0.5);
+                background: rgba(128, 128, 128, 0.1);
+                padding: 0.6em 0.9em;
+                margin: 1.2em 0;
+                line-height: 1.5;
+                max-width: 46em;
+            }
+
+            /* ---- live ---- */
+            #StreamLimiterConfigPage .sl-liveBar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5em 1em; margin: 0 0 1em; }
+            #StreamLimiterConfigPage .sl-liveBar .sl-updated { flex: 1 1 auto; }
+            #StreamLimiterConfigPage .sl-userCard { margin: 0 0 1.2em; padding: 0.2em 0 0.3em; overflow: hidden; }
+            #StreamLimiterConfigPage .sl-userHead { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5em 0.8em; padding: 0.7em 0.9em 0.5em; }
+            #StreamLimiterConfigPage .sl-userName { margin: 0; font-size: 1.05em; font-weight: 600; overflow-wrap: anywhere; }
+            #StreamLimiterConfigPage .sl-userHead .sl-spacer { flex: 1 1 auto; }
+            #StreamLimiterConfigPage .sl-badge {
+                display: inline-block;
+                padding: 0.15em 0.65em;
+                border-radius: 1em;
+                border: 1px solid rgba(128, 128, 128, 0.45);
+                font-size: 0.85em;
+                font-weight: 600;
+                white-space: nowrap;
+            }
+            #StreamLimiterConfigPage .sl-badge-full { border-color: var(--jf-palette-warning-main, #ed6c02); }
+            #StreamLimiterConfigPage .sl-badge-over { border-color: var(--jf-palette-error-main, #c62828); color: var(--jf-palette-error-main, #c62828); }
+            #StreamLimiterConfigPage .sl-device { flex-wrap: wrap; cursor: default; padding: 0.15em 0.6em; border-color: rgba(128, 128, 128, 0.2); }
+            #StreamLimiterConfigPage .sl-device:last-child { border-bottom-width: 0; }
+            #StreamLimiterConfigPage .sl-device .listItemBody { flex: 1 1 18em; min-width: 0; padding: 0.7em 0.3em; }
+            #StreamLimiterConfigPage .sl-deviceLine { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3em 0.6em; }
+            #StreamLimiterConfigPage .sl-deviceName { font-weight: 600; overflow-wrap: anywhere; }
+            #StreamLimiterConfigPage .sl-item { margin: 0.3em 0 0; overflow-wrap: anywhere; }
+            #StreamLimiterConfigPage .sl-meta { display: flex; flex-wrap: wrap; gap: 0.15em 1.2em; margin: 0.35em 0 0; font-size: 0.88em; }
+            #StreamLimiterConfigPage .sl-meta > div { display: flex; gap: 0.35em; min-width: 0; }
+            #StreamLimiterConfigPage .sl-meta dt { opacity: 0.7; }
+            #StreamLimiterConfigPage .sl-meta dd { margin: 0; overflow-wrap: anywhere; }
+            #StreamLimiterConfigPage .sl-deviceActions { display: flex; flex-wrap: wrap; gap: 0.5em; padding: 0.4em 0.3em 0.7em; }
+            #StreamLimiterConfigPage .sl-chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.4em;
+                padding: 0.1em 0.6em;
+                border-radius: 1em;
+                background: rgba(128, 128, 128, 0.18);
+                font-size: 0.82em;
+                font-weight: 600;
+                white-space: nowrap;
+            }
+            #StreamLimiterConfigPage .sl-dot { width: 0.55em; height: 0.55em; border-radius: 50%; background: currentColor; opacity: 0.6; }
+            #StreamLimiterConfigPage .sl-chip-playing .sl-dot { background: var(--jf-palette-success-main, #2e7d32); opacity: 1; }
+            #StreamLimiterConfigPage .sl-chip-streaming .sl-dot { background: var(--jf-palette-info-main, #0288d1); opacity: 1; }
+            #StreamLimiterConfigPage .sl-chip-recent .sl-dot { background: var(--jf-palette-warning-main, #ed6c02); opacity: 1; }
+            #StreamLimiterConfigPage .sl-counted { font-size: 0.82em; }
+            #StreamLimiterConfigPage .sl-empty { padding: 1.4em 1em; text-align: center; }
+
+            /* ---- limits ---- */
+            #StreamLimiterConfigPage .sl-tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.8em 1.2em; margin: 0 0 0.8em; }
+            #StreamLimiterConfigPage .sl-tools .inputContainer { flex: 1 1 14em; margin: 0; }
+            #StreamLimiterConfigPage .sl-tools .checkboxContainer { margin: 0 0 0.4em; }
+            #StreamLimiterConfigPage .sl-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5em 0.8em; margin: 0 0 0.8em; font-size: 0.92em; }
+            #StreamLimiterConfigPage .sl-numInput { width: 5.5em; padding: 0.3em 0.4em; font-size: 1em; }
+            #StreamLimiterConfigPage .sl-tableWrap { overflow-x: auto; }
+            #StreamLimiterConfigPage .sl-table { width: 100%; border-collapse: collapse; }
+            #StreamLimiterConfigPage .sl-table th,
+            #StreamLimiterConfigPage .sl-table td { text-align: left; padding: 0.55em 0.7em; border-bottom: 1px solid rgba(128, 128, 128, 0.2); vertical-align: middle; }
+            #StreamLimiterConfigPage .sl-table th { font-weight: 600; font-size: 0.85em; opacity: 0.75; white-space: nowrap; }
+            #StreamLimiterConfigPage .sl-table td.sl-colUser { overflow-wrap: anywhere; }
+            #StreamLimiterConfigPage .sl-table tr.sl-rowDirty td { background: rgba(128, 128, 128, 0.1); }
+            #StreamLimiterConfigPage .sl-table tr.sl-rowDirty td:first-child { box-shadow: inset 3px 0 0 var(--jf-palette-primary-main, #00a4dc); }
+            #StreamLimiterConfigPage .sl-tag { display: inline-block; margin-left: 0.5em; padding: 0 0.5em; border-radius: 1em; font-size: 0.75em; background: rgba(128, 128, 128, 0.22); white-space: nowrap; }
+            #StreamLimiterConfigPage .sl-effective { font-weight: 600; white-space: nowrap; }
+            #StreamLimiterConfigPage .sl-source { display: block; font-size: 0.82em; opacity: 0.7; }
+
+            /* ---- message ---- */
+            #StreamLimiterConfigPage .sl-textLabel { display: block; margin: 0 0 0.25em; }
+            #StreamLimiterConfigPage .sl-textarea {
+                display: block;
+                box-sizing: border-box;
+                width: 100%;
+                min-height: 2.5em;
+                padding: 0.35em 0.25em;
+                font-family: inherit;
+                font-size: 110%;
+                color: inherit;
+                line-height: 1.4;
+                resize: vertical;
+            }
+            #StreamLimiterConfigPage .sl-placeholders { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4em; margin: 0.5em 0 1.6em; font-size: 0.9em; }
+            #StreamLimiterConfigPage .sl-insert {
+                font: inherit;
+                color: inherit;
+                cursor: pointer;
+                padding: 0.25em 0.7em;
+                border-radius: 1em;
+                border: 1px solid rgba(128, 128, 128, 0.45);
+                background: rgba(128, 128, 128, 0.12);
+            }
+            #StreamLimiterConfigPage .sl-insert:hover { background: rgba(128, 128, 128, 0.25); }
+            #StreamLimiterConfigPage .sl-insert:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+            #StreamLimiterConfigPage .sl-insert code { font-weight: 600; }
+            #StreamLimiterConfigPage .sl-previewWrap { margin: 0 0 2em; }
+            #StreamLimiterConfigPage .sl-previewStage { padding: 1.4em 1em; border-radius: 0.3em; background: rgba(0, 0, 0, 0.55); }
+            /* Mirrors the popup injected in the web client (fixed colours there too). */
+            #StreamLimiterConfigPage .sl-preview {
+                box-sizing: border-box;
+                max-width: 420px;
+                margin: 0 auto;
+                padding: 24px;
+                border-radius: 8px;
+                background: #101010;
+                color: #fff;
+                box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+                overflow: hidden;
+            }
+            #StreamLimiterConfigPage .sl-preview h4 { margin: 0 0 12px; font-size: 1.2em; overflow-wrap: anywhere; }
+            #StreamLimiterConfigPage .sl-preview p { margin: 0 0 20px; opacity: 0.9; line-height: 1.4; overflow-wrap: anywhere; white-space: pre-line; }
+            #StreamLimiterConfigPage .sl-previewOk { float: right; background: #00a4dc; color: #fff; border-radius: 4px; padding: 8px 20px; }
+
+            /* ---- advanced ---- */
+            #StreamLimiterConfigPage .sl-raw { font-family: monospace; font-size: 0.9em; }
+            #StreamLimiterConfigPage .sl-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.4em 1.2em; margin: 0 0 1.2em; }
+            #StreamLimiterConfigPage .sl-kv dt { opacity: 0.7; }
+            #StreamLimiterConfigPage .sl-kv dd { margin: 0; overflow-wrap: anywhere; }
+            #StreamLimiterConfigPage .sl-kv code { overflow-wrap: anywhere; }
+
+            /* ---- save bar ---- */
+            #StreamLimiterConfigPage .sl-saveBar {
+                position: sticky;
+                bottom: 0;
+                z-index: 2;
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 0.5em 1em;
+                margin: 1.5em 0 0;
+                padding: 0.6em 0.8em;
+                box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.25);
+            }
+            #StreamLimiterConfigPage .sl-saveState { flex: 1 1 12em; margin: 0; }
+            #StreamLimiterConfigPage .sl-saveState.sl-isDirty { font-weight: 600; }
+            #StreamLimiterConfigPage .sl-saveBar .button-submit { flex: 0 1 16em; margin: 0; }
+            #StreamLimiterConfigPage .sl-saveBar .sl-discard { margin: 0; }
+
+            @media all and (max-width: 40em) {
+                #StreamLimiterConfigPage .sl-tab { padding: 0.8em 0.8em 0.65em; }
+                #StreamLimiterConfigPage .sl-saveBar .button-submit { flex: 1 1 100%; }
+                #StreamLimiterConfigPage .sl-table th,
+                #StreamLimiterConfigPage .sl-table td { padding: 0.5em 0.4em; }
+                #StreamLimiterConfigPage .sl-numInput { width: 4.5em; }
+                #StreamLimiterConfigPage .sl-kv { grid-template-columns: minmax(0, 1fr); gap: 0.1em; }
+                #StreamLimiterConfigPage .sl-kv dd { margin-bottom: 0.6em; }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                #StreamLimiterConfigPage .emby-button { transition: none; }
+            }
+        </style>
+
         <div data-role="content">
             <div class="content-primary">
-                <!-- ========================= ACTIVE STREAMS ========================= -->
-                <div class="verticalSection slSection">
-                    <h2 class="sectionTitle">Active streams</h2>
-                    <p class="slLead">What the plugin counts right now, per user and device. Refreshes every 5 seconds while this page is open.</p>
-                    <div id="slActiveStreams" class="slTableWrap"><p class="slMuted">Loading…</p></div>
-                    <div id="slActiveStatus" class="slStatus"></div>
+
+                <!-- ============================== HEADER ============================== -->
+                <div class="sl-header">
+                    <h2 class="sectionTitle sl-title">Stream Limiter</h2>
+                    <p id="slSummary" class="fieldDescription sl-summary" aria-live="polite">Loading…</p>
                 </div>
 
-                <form id="StreamLimiterConfigForm">
+                <div class="sl-tabs" role="tablist" aria-label="Stream Limiter settings">
+                    <button type="button" class="emby-tab-button sl-tab" role="tab" id="slTab-live" data-sl-tab="live" aria-controls="slPanel-live" aria-selected="false" tabindex="-1">Live<span class="sl-tabDot" aria-hidden="true"></span></button>
+                    <button type="button" class="emby-tab-button sl-tab" role="tab" id="slTab-limits" data-sl-tab="limits" aria-controls="slPanel-limits" aria-selected="false" tabindex="-1">Limits<span class="sl-tabDot" aria-hidden="true"></span></button>
+                    <button type="button" class="emby-tab-button sl-tab" role="tab" id="slTab-blocking" data-sl-tab="blocking" aria-controls="slPanel-blocking" aria-selected="false" tabindex="-1">Blocking<span class="sl-tabDot" aria-hidden="true"></span></button>
+                    <button type="button" class="emby-tab-button sl-tab" role="tab" id="slTab-message" data-sl-tab="message" aria-controls="slPanel-message" aria-selected="false" tabindex="-1">Message<span class="sl-tabDot" aria-hidden="true"></span></button>
+                    <button type="button" class="emby-tab-button sl-tab" role="tab" id="slTab-notifications" data-sl-tab="notifications" aria-controls="slPanel-notifications" aria-selected="false" tabindex="-1">Notifications<span class="sl-tabDot" aria-hidden="true"></span></button>
+                    <button type="button" class="emby-tab-button sl-tab" role="tab" id="slTab-advanced" data-sl-tab="advanced" aria-controls="slPanel-advanced" aria-selected="false" tabindex="-1">Advanced<span class="sl-tabDot" aria-hidden="true"></span></button>
+                </div>
 
-                    <!-- ============================ LIMITS ============================ -->
-                    <div class="verticalSection slSection">
-                        <h2 class="sectionTitle">Stream limits</h2>
-                        <p class="slLead">Set how many streams a user can play at the same time. A paused stream still counts as active.</p>
-
-                        <div class="selectContainer">
-                            <label class="selectLabel" for="Users">User</label>
-                            <select is="emby-select" id="Users" name="Users" class="emby-select-withcolor emby-select"></select>
-                        </div>
-                        <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="MaxStreams">Max streams for this user</label>
-                            <input id="MaxStreams" name="MaxStreams" type="number" is="emby-input" min="0" step="1" />
-                            <div class="fieldDescription">Leave empty or 0 to remove this user's own limit (the default below applies instead). Users already having a limit are marked in the list.</div>
-                        </div>
-
-                        <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="DefaultMaxStreams">Default limit (all other users)</label>
-                            <input id="DefaultMaxStreams" name="DefaultMaxStreams" type="number" is="emby-input" min="0" step="1" />
-                            <div class="fieldDescription">Applied to every user without an explicit limit above. 0 = unlimited.</div>
-                        </div>
+                <!-- =============================== LIVE =============================== -->
+                <div id="slPanel-live" class="sl-panel" role="tabpanel" aria-labelledby="slTab-live" data-sl-panel="live" hidden>
+                    <div class="sl-liveBar">
+                        <span id="slUpdated" class="fieldDescription sl-updated" aria-live="off">Not loaded yet</span>
+                        <button is="emby-button" type="button" id="slRefreshNow" class="raised emby-button sl-btnSmall"><span>Refresh now</span></button>
                     </div>
+                    <div id="slLiveStatus" class="sl-msg" role="status" aria-live="polite"></div>
+                    <div id="slActiveStreams"><p class="sl-muted">Loading…</p></div>
+                    <p class="fieldDescription">
+                        <strong>Stop</strong> ends the playback, cuts the device's media downloads and frees its slot. It is not a ban: the device can play again while the user is under their limit.
+                        <strong>Reset</strong> frees every slot a user holds, for when a crashed app still counts.
+                    </p>
+                </div>
 
-                    <!-- ========================= ENFORCEMENT ========================= -->
-                    <div class="verticalSection slSection">
-                        <h2 class="sectionTitle">Enforcement</h2>
-                        <p class="slLead">How a stream over the limit is stopped. The recommended defaults work for every client, including ones that ignore remote stop commands.</p>
+                <form id="StreamLimiterConfigForm" novalidate>
 
-                        <div class="slNote slBeta">
-                            <strong>BETA</strong> — the HTTP-level hard block below is new. It has been tested but is still maturing.
-                            If a legitimate stream is ever wrongly blocked, turn <em>Hard block</em> off to fall back to the
-                            classic behaviour (stop command after the stream starts).
-                        </div>
-
-                        <label class="checkboxContainer">
-                            <input id="EnableHardBlock" name="EnableHardBlock" type="checkbox" is="emby-checkbox" />
-                            <span>Hard block at the HTTP level <span class="slBadge">BETA</span></span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">Recommended, on by default. Rejects the over-limit stream before a single byte is sent, so it works on <strong>every</strong> client (Swiftfin, Infuse, external players, custom apps...). Turn off to use only the classic stop-command behaviour.</div>
-
-                        <label class="checkboxContainer">
-                            <input id="BlockPlaybackInfo" name="BlockPlaybackInfo" type="checkbox" is="emby-checkbox" />
-                            <span>Refuse playback negotiation at the limit <span class="slBadge">BETA</span></span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">On by default. Denies the stream during setup so the client shows a clean "not allowed" dialog instead of failing mid-load. Requires <em>Hard block</em>.</div>
-
-                        <label class="checkboxContainer">
-                            <input id="KillTranscodeJobs" name="KillTranscodeJobs" type="checkbox" is="emby-checkbox" />
-                            <span>Kill the transcode job of a blocked stream</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">On by default. Stops the server-side ffmpeg process feeding a blocked stream — a safety net for clients that ignore the stop command.</div>
-
-                        <label class="checkboxContainer">
-                            <input id="ForceLogoutOnLimit" name="ForceLogoutOnLimit" type="checkbox" is="emby-checkbox" />
-                            <span>Log out the offending device</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">Off by default. The most aggressive option: revokes the device's token (also cuts direct-play), but the user has to sign in again on that device.</div>
-
-                        <label class="checkboxContainer">
-                            <input id="BlockUnidentifiedRequests" name="BlockUnidentifiedRequests" type="checkbox" is="emby-checkbox" />
-                            <span>Strict mode: block requests with no identifiable user <span class="slBadge">BETA</span></span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">Off by default. By default a request whose user can't be identified is let through (fail-open). Enable to reject those too — safer, but may break unusual clients. Only turn on if you need it.</div>
-
-                        <label class="checkboxContainer">
-                            <input id="ExemptAdministrators" name="ExemptAdministrators" type="checkbox" is="emby-checkbox" />
-                            <span>Exempt administrators</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">On by default. Administrators are never limited, whatever their own limit or the default limit. Turn off to apply limits to administrators too.</div>
-
-                        <label class="checkboxContainer">
-                            <input id="LogBlocksToActivity" name="LogBlocksToActivity" type="checkbox" is="emby-checkbox" />
-                            <span>Record blocked streams in the activity log</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">On by default. Adds an entry to <em>Dashboard &gt; Activity</em> when a stream is blocked, with the user, device, client and IP address. At most one entry per user and device every 5 minutes.</div>
-                    </div>
-
-                    <!-- =========================== MESSAGE =========================== -->
-                    <div class="verticalSection slSection">
-                        <h2 class="sectionTitle">Blocked message</h2>
-                        <p class="slLead">What a blocked user sees. Set the wording once below; the two options control where it is shown.</p>
-
-                        <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="MessageTitle">Title</label>
-                            <input id="MessageTitle" name="MessageTitle" type="text" is="emby-input" placeholder="Stream Limit" />
-                            <div class="fieldDescription">Heading of the popup shown when a stream is blocked. Placeholders allowed (see below).</div>
-                        </div>
-                        <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="MessageText">Text</label>
-                            <input id="MessageText" name="MessageText" type="text" is="emby-input" placeholder="Active streams exceeded" />
-                            <div class="fieldDescription">Body of the popup, e.g. "You have reached your simultaneous streams limit."<br />
-                                Placeholders, in the title and the text: <code>{{user}}</code> the user's name, <code>{{active}}</code> the streams already playing,
-                                <code>{{limit}}</code> the user's limit, <code>{{devices}}</code> the other devices playing.
-                                Example: <em>{{user}}, you are already watching on {{devices}} ({{active}}/{{limit}}).</em></div>
-                        </div>
-
-                        <div class="slSub">Where the message appears</div>
-
-                        <label class="checkboxContainer">
-                            <input id="EnableWebMessage" name="EnableWebMessage" type="checkbox" is="emby-checkbox" />
-                            <span>Show my message on web clients <span class="slBadge">BETA</span></span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">Recommended, on by default. Displays a single clean popup with your title/text above — instead of the web client's own generic "not allowed" dialog. <strong>Web clients only</strong> (browser, Android app webview, iOS web). Added to the web client on the fly — no server restart needed and it works with read-only web folders; just refresh the browser after changing this.</div>
-
-                        <label class="checkboxContainer">
-                            <input id="ShowLimitPopup" name="ShowLimitPopup" type="checkbox" is="emby-checkbox" />
-                            <span>Also push a server message (advanced)</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">Off by default. Sends a Jellyfin "display message" command. Only some native apps show it (e.g. Android TV, as a toast), and it adds a second popup on web clients. Leave off unless you specifically want it for a native client.</div>
-
-                        <div class="slNote">
-                            <strong>Note on native apps.</strong> Swiftfin, AFinity, Streamyfin, Infuse and other native clients display their own
-                            error screen when a stream is blocked, and no server plugin can change or hide it — the block still works, only the
-                            wording is theirs. Custom wording is possible on web clients only.
-                        </div>
-                    </div>
-
-                    <!-- ======================== NOTIFICATIONS ======================== -->
-                    <div class="verticalSection slSection">
-                        <h2 class="sectionTitle">Notifications</h2>
-                        <p class="slLead">Get a message when a stream is blocked: Discord, Apprise or any JSON webhook.</p>
-
-                        <div class="slInline">
+                    <!-- ============================== LIMITS ============================== -->
+                    <div id="slPanel-limits" class="sl-panel" role="tabpanel" aria-labelledby="slTab-limits" data-sl-panel="limits" hidden>
+                        <div class="sl-group">
                             <div class="inputContainer">
-                                <label class="inputLabel inputLabelUnfocused" for="WebhookUrl">Webhook URL</label>
-                                <input id="WebhookUrl" name="WebhookUrl" type="url" is="emby-input" placeholder="https://discord.com/api/webhooks/..." />
+                                <label class="inputLabel inputLabelUnfocused" for="DefaultMaxStreams">Default limit</label>
+                                <input id="DefaultMaxStreams" name="DefaultMaxStreams" type="number" is="emby-input" min="0" step="1" inputmode="numeric" />
+                                <div class="fieldDescription">Simultaneous streams for every user without their own limit. Empty or 0 = unlimited. A paused stream still counts.</div>
                             </div>
-                            <button is="emby-button" type="button" id="slTestWebhook" class="raised emby-button"><span>Send test</span></button>
                         </div>
-                        <div class="fieldDescription">Empty = no notifications. A Discord webhook URL gets a Discord message; any other <code>http(s)</code> URL gets a JSON document (<code>title</code>, <code>body</code>, <code>type</code>… — works as-is with the Apprise API <code>/notify</code> endpoint). The test uses the URL typed above, even before saving.</div>
-                        <div id="slWebhookStatus" class="slStatus"></div>
 
-                        <label class="checkboxContainer">
-                            <input id="WebhookOnBlock" name="WebhookOnBlock" type="checkbox" is="emby-checkbox" />
-                            <span>Notify when a stream is blocked</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">On by default. At most one notification per user and device every 5 minutes.</div>
+                        <div class="sl-group">
+                            <h3 class="sl-groupTitle">Per-user limits</h3>
+                            <p class="fieldDescription sl-groupLead">Type a number to give a user their own limit. Leave it empty (or 0) to use the default.</p>
 
-                        <label class="checkboxContainer">
-                            <input id="WebhookOnAdminKick" name="WebhookOnAdminKick" type="checkbox" is="emby-checkbox" />
-                            <span>Notify when an administrator stops a stream</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">Off by default. Sent when a stream is stopped from <em>Active streams</em> above.</div>
+                            <div class="sl-tools">
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="slUserSearch">Find a user</label>
+                                    <input id="slUserSearch" type="search" is="emby-input" autocomplete="off" />
+                                </div>
+                                <label class="checkboxContainer">
+                                    <input id="slOnlyExplicit" type="checkbox" is="emby-checkbox" />
+                                    <span>Only users with their own limit</span>
+                                </label>
+                            </div>
+                            <div class="sl-bulk">
+                                <label for="slBulkValue" id="slBulkLabel">Set the own limit of the users shown</label>
+                                <input id="slBulkValue" type="number" class="emby-input sl-numInput" min="0" step="1" inputmode="numeric" placeholder="Default" />
+                                <button is="emby-button" type="button" id="slBulkApply" class="raised emby-button sl-btnSmall"><span>Apply</span></button>
+                            </div>
+
+                            <div class="sl-tableWrap">
+                                <table class="sl-table">
+                                    <thead>
+                                        <tr><th scope="col">User</th><th scope="col">Own limit</th><th scope="col">Applies</th></tr>
+                                    </thead>
+                                    <tbody id="slUserRows"></tbody>
+                                </table>
+                            </div>
+                            <div id="slUsersStatus" class="sl-msg fieldDescription" role="status"></div>
+                        </div>
                     </div>
 
-                    <div>
-                        <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                    <!-- ============================= BLOCKING ============================= -->
+                    <div id="slPanel-blocking" class="sl-panel" role="tabpanel" aria-labelledby="slTab-blocking" data-sl-panel="blocking" hidden>
+                        <div class="sl-group">
+                            <h3 class="sl-groupTitle">Recommended</h3>
+                            <p class="fieldDescription sl-groupLead">On by default. Together they stop an over-limit stream on every client, including apps that ignore stop commands.</p>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="EnableHardBlock" name="EnableHardBlock" type="checkbox" is="emby-checkbox" />
+                                    <span>Hard block (beta)</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription">Refuses the extra stream before any video is sent. Works with every app and external player. Turn off to only stop streams after they start.</div>
+                            </div>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="BlockPlaybackInfo" name="BlockPlaybackInfo" type="checkbox" is="emby-checkbox" />
+                                    <span>Refuse playback before it starts (beta)</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription" id="slPlaybackInfoDesc">The app shows a clean "not allowed" error instead of loading forever. Needs <em>Hard block</em>.</div>
+                            </div>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="KillTranscodeJobs" name="KillTranscodeJobs" type="checkbox" is="emby-checkbox" />
+                                    <span>Stop the server transcode of a blocked stream</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription">Ends the ffmpeg process feeding it, for apps that ignore the stop command.</div>
+                            </div>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="ExemptAdministrators" name="ExemptAdministrators" type="checkbox" is="emby-checkbox" />
+                                    <span>Never limit administrators</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription">Administrators ignore both their own limit and the default limit.</div>
+                            </div>
+                        </div>
+
+                        <div class="sl-group">
+                            <h3 class="sl-groupTitle">Aggressive</h3>
+                            <p class="fieldDescription sl-groupLead">Off by default. Turn on only if the recommended options are not enough for a client.</p>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="ForceLogoutOnLimit" name="ForceLogoutOnLimit" type="checkbox" is="emby-checkbox" />
+                                    <span>Log out the device that went over the limit</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription">Revokes the device's sign-in. The user has to sign in again on it.</div>
+                            </div>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="BlockUnidentifiedRequests" name="BlockUnidentifiedRequests" type="checkbox" is="emby-checkbox" />
+                                    <span>Strict mode: block media requests without a known user (beta)</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription">Normally a request that can't be tied to a user is let through. Strict mode refuses it, which can break unusual apps.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ============================== MESSAGE ============================= -->
+                    <div id="slPanel-message" class="sl-panel" role="tabpanel" aria-labelledby="slTab-message" data-sl-panel="message" hidden>
+                        <div class="sl-group">
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="MessageTitle">Title</label>
+                                <input id="MessageTitle" name="MessageTitle" type="text" is="emby-input" placeholder="Stream Limit" maxlength="200" />
+                            </div>
+                            <div>
+                                <label class="textareaLabel sl-textLabel" for="MessageText">Text</label>
+                                <textarea id="MessageText" name="MessageText" class="emby-textarea sl-textarea" rows="3" placeholder="Active streams exceeded" maxlength="1000"></textarea>
+                            </div>
+                            <div class="sl-placeholders" role="group" aria-label="Insert a placeholder">
+                                <span class="fieldDescription">Insert:</span>
+                                <button type="button" class="sl-insert" data-sl-insert="{{user}}" title="The user's name"><code>{{user}}</code> name</button>
+                                <button type="button" class="sl-insert" data-sl-insert="{{active}}" title="Streams already playing (the blocked one not included)"><code>{{active}}</code> playing</button>
+                                <button type="button" class="sl-insert" data-sl-insert="{{limit}}" title="The user's limit"><code>{{limit}}</code> limit</button>
+                                <button type="button" class="sl-insert" data-sl-insert="{{devices}}" title="The other devices playing, comma-separated"><code>{{devices}}</code> devices</button>
+                            </div>
+
+                            <div class="sl-previewWrap">
+                                <div class="fieldDescription" id="slPreviewLabel">Preview on a web client, with sample values</div>
+                                <div class="sl-previewStage" aria-labelledby="slPreviewLabel" role="group">
+                                    <div class="sl-preview">
+                                        <h4 id="slPreviewTitle"></h4>
+                                        <p id="slPreviewText"></p>
+                                        <span class="sl-previewOk" aria-hidden="true">OK</span>
+                                        <div style="clear: both;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="sl-group">
+                            <h3 class="sl-groupTitle">Where it is shown</h3>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="EnableWebMessage" name="EnableWebMessage" type="checkbox" is="emby-checkbox" />
+                                    <span>Show the message on web clients (beta)</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription">Browser and the Android / iOS apps: one popup with your wording replaces the generic error. Refresh the browser after a change; no server restart needed.</div>
+                            </div>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="NotifyNativeApps" name="NotifyNativeApps" type="checkbox" is="emby-checkbox" />
+                                    <span>Show the message on native apps (Android TV, Swiftfin, Streamyfin…)</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription">Sends your wording as a short notice to apps that can't show the web popup, so the user sees why playback did not start. Shown by apps that display server messages.</div>
+                            </div>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="ShowLimitPopup" name="ShowLimitPopup" type="checkbox" is="emby-checkbox" />
+                                    <span>Also send the server message to web clients</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription">Adds a second, server-sent popup on web clients. Usually not needed when the option above is on.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- =========================== NOTIFICATIONS ========================== -->
+                    <div id="slPanel-notifications" class="sl-panel" role="tabpanel" aria-labelledby="slTab-notifications" data-sl-panel="notifications" hidden>
+                        <div class="sl-group">
+                            <h3 class="sl-groupTitle">Activity log</h3>
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="LogBlocksToActivity" name="LogBlocksToActivity" type="checkbox" is="emby-checkbox" />
+                                    <span>Record blocked streams in Dashboard &gt; Activity</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription">With the user, device, app and IP address. At most one entry per user and device every 5 minutes.</div>
+                            </div>
+                        </div>
+
+                        <div class="sl-group">
+                            <h3 class="sl-groupTitle">Webhook</h3>
+                            <p class="fieldDescription sl-groupLead">Discord webhooks get a Discord message; any other address gets a JSON POST (works with Apprise <code>/notify</code>). Leave empty to send nothing.</p>
+                            <div class="sl-row">
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="WebhookUrl">Webhook URL</label>
+                                    <input id="WebhookUrl" name="WebhookUrl" type="url" is="emby-input" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" spellcheck="false" aria-describedby="slWebhookStatus" />
+                                </div>
+                                <button is="emby-button" type="button" id="slTestWebhook" class="raised emby-button"><span>Send test</span></button>
+                            </div>
+                            <div id="slWebhookStatus" class="sl-msg" role="status" aria-live="polite"></div>
+                            <p class="fieldDescription">The test uses the address typed above, even before you save.</p>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="WebhookOnBlock" name="WebhookOnBlock" type="checkbox" is="emby-checkbox" />
+                                    <span>Notify when a stream is blocked</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription">At most one notification per user and device every 5 minutes.</div>
+                            </div>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="WebhookOnAdminKick" name="WebhookOnAdminKick" type="checkbox" is="emby-checkbox" />
+                                    <span>Notify when an administrator stops a stream</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription">Sent by the Stop buttons of the Live tab.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ============================= ADVANCED ============================= -->
+                    <div id="slPanel-advanced" class="sl-panel" role="tabpanel" aria-labelledby="slTab-advanced" data-sl-panel="advanced" hidden>
+                        <div class="sl-group">
+                            <h3 class="sl-groupTitle">Defaults</h3>
+                            <p class="fieldDescription sl-groupLead">Puts every switch back to its default. Limits, message wording and the webhook URL are kept. Nothing changes until you save.</p>
+                            <button is="emby-button" type="button" id="slRestoreDefaults" class="raised emby-button"><span>Reset switches to defaults</span></button>
+                            <div id="slRestoreStatus" class="sl-msg" role="status"></div>
+                        </div>
+
+                        <div class="sl-group">
+                            <h3 class="sl-groupTitle">Stored configuration</h3>
+                            <p class="fieldDescription sl-groupLead">Read-only. Managed by the plugin.</p>
+                            <dl class="sl-kv">
+                                <dt>Configuration version</dt>
+                                <dd id="slConfigVersion">–</dd>
+                                <dt>Users with their own limit</dt>
+                                <dd id="slExplicitCount">–</dd>
+                            </dl>
+                            <label class="textareaLabel sl-textLabel" for="slRawLimits">Saved per-user limits (UserStreamLimits, JSON, dashless user ids)</label>
+                            <textarea id="slRawLimits" class="emby-textarea sl-textarea sl-raw" rows="4" readonly></textarea>
+                        </div>
+
+                        <div class="sl-group">
+                            <h3 class="sl-groupTitle">Management API</h3>
+                            <p class="fieldDescription">Administrator endpoints under <code>/StreamLimit/</code>: GetUserStreamLimit, GetAllStreamLimits, SetUserStreamLimit, SetAlertMessage, ActiveStreams, KickStream, ResetUserStreams, TestWebhook. See the StreamLimit section of the server's Swagger page (<code>/api-docs/swagger</code>).</p>
+                        </div>
+                    </div>
+
+                    <!-- ============================= SAVE BAR ============================= -->
+                    <div id="slSaveBar" class="paperList sl-saveBar" hidden>
+                        <p id="slSaveState" class="sl-saveState" role="status" aria-live="polite">No unsaved changes</p>
+                        <button is="emby-button" type="button" id="slDiscard" class="button-flat emby-button sl-discard" hidden><span>Discard</span></button>
+                        <button is="emby-button" type="submit" id="slSave" class="raised button-submit block emby-button">
                             <span>Save</span>
                         </button>
                     </div>
                 </form>
             </div>
         </div>
+
         <script type="text/javascript">
             (function () {
-                var pluginUniqueId = 'd98fbe02-daf3-4c09-a832-4b4e1d07326c';
-                var usersWithValues = {};
-                var usersById = {};
+                'use strict';
 
-                function normalizeKey(id) {
-                    return (id || '').replace(/-/g, '').toLowerCase();
+                var pluginUniqueId = 'd98fbe02-daf3-4c09-a832-4b4e1d07326c';
+                var TAB_STORAGE_KEY = 'StreamLimiter.configTab';
+                var TABS = ['live', 'limits', 'blocking', 'message', 'notifications', 'advanced'];
+                var REFRESH_MS = 5000;
+                // Off the Live tab the view is only needed for the header summary.
+                var BACKGROUND_REFRESH_EVERY = 6;
+
+                // jellyfin-web may keep a previous instance of this page in the DOM for a while;
+                // the one just added is the last. Every lookup is scoped to it.
+                var pages = document.querySelectorAll('#StreamLimiterConfigPage');
+                var page = pages[pages.length - 1];
+
+                function el(id) {
+                    return page.querySelector('#' + id);
                 }
 
-                // Tolerant parse: legacy configs may contain string values or junk.
+                // Every config property except UserStreamLimits (per-user table) and
+                // ConfigVersion (read-only). def = the C# constructor default.
+                var FIELDS = [
+                    { key: 'DefaultMaxStreams', type: 'int', def: 0 },
+                    { key: 'EnableHardBlock', type: 'bool', def: true },
+                    { key: 'BlockPlaybackInfo', type: 'bool', def: true },
+                    { key: 'KillTranscodeJobs', type: 'bool', def: true },
+                    { key: 'ExemptAdministrators', type: 'bool', def: true },
+                    { key: 'ForceLogoutOnLimit', type: 'bool', def: false },
+                    { key: 'BlockUnidentifiedRequests', type: 'bool', def: false },
+                    { key: 'MessageTitle', type: 'text', def: 'Stream Limit' },
+                    { key: 'MessageText', type: 'text', def: 'Active streams exceeded' },
+                    { key: 'EnableWebMessage', type: 'bool', def: true },
+                    { key: 'NotifyNativeApps', type: 'bool', def: true },
+                    { key: 'ShowLimitPopup', type: 'bool', def: false },
+                    { key: 'LogBlocksToActivity', type: 'bool', def: true },
+                    { key: 'WebhookUrl', type: 'text', def: '' },
+                    { key: 'WebhookOnBlock', type: 'bool', def: true },
+                    { key: 'WebhookOnAdminKick', type: 'bool', def: false }
+                ];
+
+                var loaded = false;
+                var savedValues = {};      // form values as last loaded/saved
+                var savedConfig = null;    // raw config as last loaded/saved
+                var savedLimits = {};      // normalized user key -> limit, as saved
+                var editedLimits = {};     // normalized user key -> limit (0 = none), edits only
+                var users = [];            // from ApiClient.getUsers()
+                var usersLoaded = false;
+                var liveData = null;       // last ActiveStreams answer
+                var activeTab = 'live';
+                var lastMessageField = null;
+
+                // ------------------------------- helpers -------------------------------
+                function normalizeKey(id) {
+                    return String(id || '').replace(/-/g, '').toLowerCase();
+                }
+
+                // Tolerant parse: legacy configs may contain dashed ids, string values or junk.
                 function parseLimits(json) {
                     var result = {};
                     if (!json) {
@@ -245,111 +586,734 @@
                     return result;
                 }
 
-                function userLabel(user) {
-                    var limit = usersWithValues[normalizeKey(user.Id)];
-                    return limit ? user.Name + ' — limit ' + limit : user.Name;
+                function parseLimitInput(text) {
+                    var value = parseInt(String(text).trim(), 10);
+                    return !isNaN(value) && value > 0 ? value : 0;
                 }
-
-                function populateUserDropdown(selectedValue) {
-                    var ddlUsers = document.getElementById('Users');
-                    // Rebuild from scratch: pageshow fires on every navigation and
-                    // appending again duplicated the entries.
-                    ddlUsers.innerHTML = '';
-                    Object.keys(usersById).forEach(function (id) {
-                        var option = document.createElement('option');
-                        option.value = id;
-                        option.textContent = userLabel(usersById[id]);
-                        ddlUsers.appendChild(option);
-                    });
-                    if (selectedValue && usersById[selectedValue]) {
-                        ddlUsers.value = selectedValue;
-                    }
-                    refreshMaxStreams();
-                }
-
-                function refreshMaxStreams() {
-                    var ddlUsers = document.getElementById('Users');
-                    var limit = usersWithValues[normalizeKey(ddlUsers.value)];
-                    document.getElementById('MaxStreams').value = limit ? limit : '';
-                }
-
-                function loadSettings() {
-                    Dashboard.showLoadingMsg();
-                    Promise.all([
-                        ApiClient.getUsers(),
-                        ApiClient.getPluginConfiguration(pluginUniqueId)
-                    ]).then(function (results) {
-                        var users = results[0];
-                        var config = results[1];
-
-                        usersWithValues = parseLimits(config.UserStreamLimits);
-                        usersById = {};
-                        users.forEach(function (user) {
-                            usersById[user.Id] = user;
-                        });
-
-                        populateUserDropdown();
-                        document.getElementById('DefaultMaxStreams').value = config.DefaultMaxStreams > 0 ? config.DefaultMaxStreams : '';
-                        document.getElementById('EnableHardBlock').checked = config.EnableHardBlock !== false;
-                        document.getElementById('BlockPlaybackInfo').checked = config.BlockPlaybackInfo !== false;
-                        document.getElementById('BlockUnidentifiedRequests').checked = config.BlockUnidentifiedRequests === true;
-                        document.getElementById('KillTranscodeJobs').checked = config.KillTranscodeJobs !== false;
-                        document.getElementById('ForceLogoutOnLimit').checked = config.ForceLogoutOnLimit === true;
-                        document.getElementById('ExemptAdministrators').checked = config.ExemptAdministrators !== false;
-                        document.getElementById('LogBlocksToActivity').checked = config.LogBlocksToActivity !== false;
-                        document.getElementById('EnableWebMessage').checked = config.EnableWebMessage !== false;
-                        document.getElementById('ShowLimitPopup').checked = config.ShowLimitPopup === true;
-                        document.getElementById('MessageTitle').value = config.MessageTitle || '';
-                        document.getElementById('MessageText').value = config.MessageText || '';
-                        document.getElementById('WebhookUrl').value = config.WebhookUrl || '';
-                        document.getElementById('WebhookOnBlock').checked = config.WebhookOnBlock !== false;
-                        document.getElementById('WebhookOnAdminKick').checked = config.WebhookOnAdminKick === true;
-                        Dashboard.hideLoadingMsg();
-                    }, function () {
-                        Dashboard.hideLoadingMsg();
-                    });
-                }
-
-                document.getElementById('Users').addEventListener('change', refreshMaxStreams);
-
-                document.querySelector('#StreamLimiterConfigPage').addEventListener('pageshow', loadSettings);
 
                 function isWebhookUrl(url) {
                     return /^https?:\/\/[^\s\/?#]+/i.test(url);
                 }
 
-                // ---------------------------- Active streams ----------------------------
+                function plural(n, one, many) {
+                    return n + ' ' + (n === 1 ? one : (many || one + 's'));
+                }
+
+                function make(tag, className, text) {
+                    var node = document.createElement(tag);
+                    if (className) {
+                        node.className = className;
+                    }
+                    if (text !== null && text !== undefined && text !== '') {
+                        node.textContent = String(text);
+                    }
+                    return node;
+                }
+
+                function smallButton(label, className, onClick) {
+                    var button = make('button', 'raised emby-button sl-btnSmall' + (className ? ' ' + className : ''), label);
+                    button.type = 'button';
+                    button.setAttribute('is', 'emby-button');
+                    button.addEventListener('click', onClick);
+                    return button;
+                }
+
+                function setMsg(id, text, kind) {
+                    var node = el(id);
+                    if (!node) {
+                        return;
+                    }
+                    node.textContent = text || '';
+                    node.classList.toggle('sl-msg-error', kind === 'error');
+                    node.classList.toggle('sl-msg-ok', kind === 'ok');
+                }
+
+                function httpStatus(err) {
+                    return err && typeof err.status === 'number' ? err.status : null;
+                }
+
+                function formatTime(date) {
+                    return date && !isNaN(date.getTime()) ? date.toLocaleTimeString() : '';
+                }
+
+                function formatIdle(seconds) {
+                    if (typeof seconds !== 'number' || isNaN(seconds) || seconds < 0) {
+                        return '';
+                    }
+                    if (seconds < 90) {
+                        return Math.round(seconds) + ' s';
+                    }
+                    if (seconds < 5400) {
+                        return Math.round(seconds / 60) + ' min';
+                    }
+                    return Math.round(seconds / 3600) + ' h';
+                }
+
+                function storageGet(key) {
+                    try {
+                        return window.localStorage.getItem(key);
+                    } catch (e) {
+                        return null;
+                    }
+                }
+
+                function storageSet(key, value) {
+                    try {
+                        window.localStorage.setItem(key, value);
+                    } catch (e) {
+                        // private mode / blocked storage: the tab is simply not remembered
+                    }
+                }
+
+                // --------------------------------- tabs --------------------------------
+                function tabButtons() {
+                    return Array.prototype.slice.call(page.querySelectorAll('.sl-tab'));
+                }
+
+                function selectTab(name, focus) {
+                    if (TABS.indexOf(name) === -1) {
+                        name = 'live';
+                    }
+                    activeTab = name;
+                    tabButtons().forEach(function (button) {
+                        var selected = button.getAttribute('data-sl-tab') === name;
+                        button.setAttribute('aria-selected', selected ? 'true' : 'false');
+                        button.tabIndex = selected ? 0 : -1;
+                        button.classList.toggle('emby-tab-button-active', selected);
+                        if (selected && focus) {
+                            button.focus();
+                        }
+                    });
+                    Array.prototype.forEach.call(page.querySelectorAll('.sl-panel'), function (panel) {
+                        panel.hidden = panel.getAttribute('data-sl-panel') !== name;
+                    });
+                    storageSet(TAB_STORAGE_KEY, name);
+                    updateSaveBar();
+                    if (name === 'live') {
+                        // Fresh data right away instead of waiting for the next tick.
+                        startRefresh();
+                    }
+                }
+
+                tabButtons().forEach(function (button) {
+                    button.addEventListener('click', function () {
+                        selectTab(button.getAttribute('data-sl-tab'), false);
+                    });
+                    button.addEventListener('keydown', function (e) {
+                        var index = TABS.indexOf(button.getAttribute('data-sl-tab'));
+                        var next = null;
+                        if (e.key === 'ArrowRight') {
+                            next = (index + 1) % TABS.length;
+                        } else if (e.key === 'ArrowLeft') {
+                            next = (index - 1 + TABS.length) % TABS.length;
+                        } else if (e.key === 'Home') {
+                            next = 0;
+                        } else if (e.key === 'End') {
+                            next = TABS.length - 1;
+                        }
+                        if (next !== null) {
+                            e.preventDefault();
+                            selectTab(TABS[next], true);
+                        }
+                    });
+                });
+
+                // ------------------------------ form values ----------------------------
+                function readForm() {
+                    var values = {};
+                    FIELDS.forEach(function (field) {
+                        var input = el(field.key);
+                        if (field.type === 'bool') {
+                            values[field.key] = input.checked;
+                        } else if (field.type === 'int') {
+                            values[field.key] = parseLimitInput(input.value);
+                        } else {
+                            values[field.key] = field.key === 'WebhookUrl' ? input.value.trim() : input.value;
+                        }
+                    });
+                    return values;
+                }
+
+                function writeForm(values) {
+                    FIELDS.forEach(function (field) {
+                        var input = el(field.key);
+                        var value = values[field.key];
+                        if (field.type === 'bool') {
+                            input.checked = value;
+                        } else if (field.type === 'int') {
+                            input.value = value > 0 ? value : '';
+                        } else {
+                            input.value = value || '';
+                        }
+                    });
+                }
+
+                function valuesFromConfig(config) {
+                    var values = {};
+                    FIELDS.forEach(function (field) {
+                        var raw = config[field.key];
+                        if (field.type === 'bool') {
+                            // A field missing from an older config takes its default.
+                            values[field.key] = field.def ? raw !== false : raw === true;
+                        } else if (field.type === 'int') {
+                            values[field.key] = parseLimitInput(raw === undefined || raw === null ? '' : raw);
+                        } else {
+                            values[field.key] = typeof raw === 'string' ? raw : '';
+                        }
+                    });
+                    return values;
+                }
+
+                // ----------------------------- dirty tracking --------------------------
+                function dirtyLimitKeys() {
+                    return Object.keys(editedLimits).filter(function (key) {
+                        return (editedLimits[key] || 0) !== (savedLimits[key] || 0);
+                    });
+                }
+
+                function dirtyTabs() {
+                    var tabs = {};
+                    if (!loaded) {
+                        return tabs;
+                    }
+                    var current = readForm();
+                    FIELDS.forEach(function (field) {
+                        if (current[field.key] !== savedValues[field.key]) {
+                            var panel = el(field.key).closest('[data-sl-panel]');
+                            if (panel) {
+                                tabs[panel.getAttribute('data-sl-panel')] = true;
+                            }
+                        }
+                    });
+                    if (dirtyLimitKeys().length) {
+                        tabs.limits = true;
+                    }
+                    return tabs;
+                }
+
+                function updateSaveBar() {
+                    var tabs = dirtyTabs();
+                    var names = Object.keys(tabs);
+                    var dirty = names.length > 0;
+                    tabButtons().forEach(function (button) {
+                        var isDirty = !!tabs[button.getAttribute('data-sl-tab')];
+                        button.classList.toggle('sl-isDirty', isDirty);
+                        button.setAttribute('aria-label', button.textContent + (isDirty ? ' (unsaved changes)' : ''));
+                    });
+                    var bar = el('slSaveBar');
+                    // The Live tab has nothing to save: the bar only shows there to warn about edits.
+                    bar.hidden = !loaded || (activeTab === 'live' && !dirty);
+                    var state = el('slSaveState');
+                    state.classList.toggle('sl-isDirty', dirty);
+                    if (dirty) {
+                        var labels = names.map(function (name) {
+                            return el('slTab-' + name).textContent;
+                        });
+                        state.textContent = 'Unsaved changes in ' + labels.join(', ');
+                    } else {
+                        state.textContent = 'All changes saved';
+                    }
+                    el('slDiscard').hidden = !dirty;
+                }
+
+                // --------------------------------- header ------------------------------
+                function effectiveLimit(user, values, limits) {
+                    var key = normalizeKey(user.Id);
+                    var isAdmin = !!(user.Policy && user.Policy.IsAdministrator);
+                    if (isAdmin && values.ExemptAdministrators) {
+                        return { value: 0, source: 'exempt' };
+                    }
+                    var own = limits[key] || 0;
+                    if (own > 0) {
+                        return { value: own, source: 'own' };
+                    }
+                    if (values.DefaultMaxStreams > 0) {
+                        return { value: values.DefaultMaxStreams, source: 'default' };
+                    }
+                    return { value: 0, source: 'unlimited' };
+                }
+
+                function countedStreams(user) {
+                    return (user.streams || []).filter(isCounted).length;
+                }
+
+                function updateSummary() {
+                    var parts = [];
+                    if (liveData) {
+                        var counted = 0;
+                        liveData.forEach(function (user) {
+                            counted += countedStreams(user);
+                        });
+                        parts.push(plural(counted, 'stream') + ' counted');
+                    }
+                    if (loaded && usersLoaded) {
+                        var limited = users.filter(function (user) {
+                            return effectiveLimit(user, savedValues, savedLimits).value > 0;
+                        }).length;
+                        parts.push(plural(limited, 'user') + ' limited');
+                    }
+                    if (loaded) {
+                        parts.push('hard block ' + (savedValues.EnableHardBlock ? 'on' : 'off'));
+                    }
+                    el('slSummary').textContent = parts.length ? parts.join(' · ') : 'Loading…';
+                }
+
+                // ------------------------------ limits table ---------------------------
+                function currentLimit(key) {
+                    return Object.prototype.hasOwnProperty.call(editedLimits, key) ? editedLimits[key] : (savedLimits[key] || 0);
+                }
+
+                function currentLimitsMap() {
+                    var map = {};
+                    Object.keys(savedLimits).forEach(function (key) {
+                        map[key] = savedLimits[key];
+                    });
+                    Object.keys(editedLimits).forEach(function (key) {
+                        map[key] = editedLimits[key];
+                    });
+                    return map;
+                }
+
+                function describeEffective(user, values, limits) {
+                    var eff = effectiveLimit(user, values, limits);
+                    var own = limits[normalizeKey(user.Id)] || 0;
+                    switch (eff.source) {
+                        case 'exempt':
+                            return { text: 'Exempt', source: own > 0 ? 'administrator, own limit ignored' : 'administrator' };
+                        case 'own':
+                            return { text: plural(eff.value, 'stream'), source: 'own limit' };
+                        case 'default':
+                            return { text: plural(eff.value, 'stream'), source: 'default' };
+                        default:
+                            return { text: 'Unlimited', source: 'no default set' };
+                    }
+                }
+
+                function visibleUsers() {
+                    var query = el('slUserSearch').value.trim().toLowerCase();
+                    var onlyExplicit = el('slOnlyExplicit').checked;
+                    return users.filter(function (user) {
+                        if (query && String(user.Name || '').toLowerCase().indexOf(query) === -1) {
+                            return false;
+                        }
+                        return !onlyExplicit || currentLimit(normalizeKey(user.Id)) > 0;
+                    });
+                }
+
+                function updateRow(row, user, values, limits) {
+                    var key = normalizeKey(user.Id);
+                    var info = describeEffective(user, values, limits);
+                    row.querySelector('.sl-effective').textContent = info.text;
+                    row.querySelector('.sl-source').textContent = info.source;
+                    row.classList.toggle('sl-rowDirty', currentLimit(key) !== (savedLimits[key] || 0));
+                }
+
+                function renderUsers() {
+                    var body = el('slUserRows');
+                    body.textContent = '';
+                    if (!usersLoaded) {
+                        return;
+                    }
+                    var values = readForm();
+                    var limits = currentLimitsMap();
+                    var shown = visibleUsers();
+
+                    shown.forEach(function (user) {
+                        var key = normalizeKey(user.Id);
+                        var row = make('tr');
+                        row.setAttribute('data-sl-user', key);
+
+                        var nameCell = make('td', 'sl-colUser', user.Name || user.Id);
+                        if (user.Policy && user.Policy.IsAdministrator) {
+                            nameCell.appendChild(make('span', 'sl-tag', 'admin'));
+                        }
+                        if (user.Policy && user.Policy.IsDisabled) {
+                            nameCell.appendChild(make('span', 'sl-tag', 'disabled'));
+                        }
+                        row.appendChild(nameCell);
+
+                        var inputCell = make('td');
+                        var input = make('input', 'emby-input sl-numInput');
+                        input.type = 'number';
+                        input.min = '0';
+                        input.step = '1';
+                        input.inputMode = 'numeric';
+                        input.placeholder = 'Default';
+                        input.setAttribute('aria-label', 'Own limit for ' + (user.Name || user.Id));
+                        var own = currentLimit(key);
+                        input.value = own > 0 ? String(own) : '';
+                        input.addEventListener('input', function () {
+                            editedLimits[key] = parseLimitInput(input.value);
+                            updateRow(row, user, readForm(), currentLimitsMap());
+                            updateSaveBar();
+                        });
+                        inputCell.appendChild(input);
+                        row.appendChild(inputCell);
+
+                        var effCell = make('td');
+                        effCell.appendChild(make('span', 'sl-effective'));
+                        effCell.appendChild(make('span', 'sl-source'));
+                        row.appendChild(effCell);
+
+                        updateRow(row, user, values, limits);
+                        body.appendChild(row);
+                    });
+
+                    var status;
+                    if (!users.length) {
+                        status = 'No users on this server.';
+                    } else if (!shown.length) {
+                        status = 'No user matches. Clear the search to see all ' + plural(users.length, 'user') + '.';
+                    } else {
+                        status = 'Showing ' + shown.length + ' of ' + plural(users.length, 'user') + '.';
+                    }
+                    setMsg('slUsersStatus', status);
+                    el('slBulkLabel').textContent = 'Set the own limit of the ' + plural(shown.length, 'user') + ' shown';
+                }
+
+                // Effective values change with the default limit and the admin exemption.
+                function refreshEffectiveColumn() {
+                    var values = readForm();
+                    var limits = currentLimitsMap();
+                    var byKey = {};
+                    users.forEach(function (user) {
+                        byKey[normalizeKey(user.Id)] = user;
+                    });
+                    Array.prototype.forEach.call(el('slUserRows').querySelectorAll('tr[data-sl-user]'), function (row) {
+                        var user = byKey[row.getAttribute('data-sl-user')];
+                        if (user) {
+                            updateRow(row, user, values, limits);
+                        }
+                    });
+                }
+
+                function preventEnterSubmit(input) {
+                    input.addEventListener('keydown', function (e) {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                        }
+                    });
+                }
+
+                el('slUserSearch').addEventListener('input', renderUsers);
+                preventEnterSubmit(el('slUserSearch'));
+                el('slOnlyExplicit').addEventListener('change', renderUsers);
+                preventEnterSubmit(el('slBulkValue'));
+
+                el('slBulkApply').addEventListener('click', function () {
+                    var shown = visibleUsers();
+                    if (!shown.length) {
+                        return;
+                    }
+                    var value = parseLimitInput(el('slBulkValue').value);
+                    var what = value > 0 ? 'an own limit of ' + plural(value, 'stream') : 'no own limit (default applies)';
+                    if (!window.confirm('Give the ' + plural(shown.length, 'user') + ' shown ' + what + '? Nothing is saved until you press Save.')) {
+                        return;
+                    }
+                    shown.forEach(function (user) {
+                        editedLimits[normalizeKey(user.Id)] = value;
+                    });
+                    renderUsers();
+                    updateSaveBar();
+                });
+
+                // -------------------------------- message ------------------------------
+                var SAMPLE = { active: '2', limit: '2', devices: 'Living room TV, Phone' };
+
+                function renderTemplate(template) {
+                    var sampleUser = 'alice';
+                    var firstUser = users.filter(function (user) {
+                        return !(user.Policy && user.Policy.IsAdministrator);
+                    })[0];
+                    if (firstUser && firstUser.Name) {
+                        sampleUser = firstUser.Name;
+                    }
+                    return String(template).replace(/\{\{\s*(user|active|limit|devices)\s*\}\}/gi, function (match, name) {
+                        name = name.toLowerCase();
+                        return name === 'user' ? sampleUser : SAMPLE[name];
+                    });
+                }
+
+                function updatePreview() {
+                    var title = el('MessageTitle').value;
+                    var text = el('MessageText').value;
+                    // Same fallback as the server: blank wording uses the default.
+                    el('slPreviewTitle').textContent = renderTemplate(title.trim() ? title : 'Stream Limit');
+                    el('slPreviewText').textContent = renderTemplate(text.trim() ? text : 'Active streams exceeded');
+                }
+
+                ['MessageTitle', 'MessageText'].forEach(function (id) {
+                    el(id).addEventListener('focus', function () {
+                        lastMessageField = el(id);
+                    });
+                    el(id).addEventListener('input', updatePreview);
+                });
+
+                Array.prototype.forEach.call(page.querySelectorAll('[data-sl-insert]'), function (button) {
+                    button.addEventListener('click', function () {
+                        var target = lastMessageField || el('MessageText');
+                        var token = button.getAttribute('data-sl-insert');
+                        var start = typeof target.selectionStart === 'number' ? target.selectionStart : target.value.length;
+                        var end = typeof target.selectionEnd === 'number' ? target.selectionEnd : start;
+                        target.value = target.value.slice(0, start) + token + target.value.slice(end);
+                        target.focus();
+                        try {
+                            target.setSelectionRange(start + token.length, start + token.length);
+                        } catch (e) {
+                            // some input types do not support selection
+                        }
+                        target.dispatchEvent(new Event('input', { bubbles: true }));
+                    });
+                });
+
+                // ------------------------------ dependencies ---------------------------
+                function updateDependencies() {
+                    var hardBlock = el('EnableHardBlock').checked;
+                    el('BlockPlaybackInfo').disabled = !hardBlock;
+                    el('slPlaybackInfoDesc').classList.toggle('sl-muted', !hardBlock);
+                }
+
+                el('EnableHardBlock').addEventListener('change', updateDependencies);
+
+                // Any change in the form: dirty state, effective limits, preview.
+                el('StreamLimiterConfigForm').addEventListener('input', function (e) {
+                    if (e.target && e.target.id === 'WebhookUrl') {
+                        validateWebhookField();
+                    }
+                    if (e.target && e.target.id === 'DefaultMaxStreams') {
+                        refreshEffectiveColumn();
+                    }
+                    updateSaveBar();
+                });
+                el('StreamLimiterConfigForm').addEventListener('change', function (e) {
+                    if (e.target && (e.target.id === 'ExemptAdministrators' || e.target.id === 'DefaultMaxStreams')) {
+                        refreshEffectiveColumn();
+                    }
+                    updateSaveBar();
+                });
+
+                // -------------------------------- webhook ------------------------------
+                function validateWebhookField() {
+                    var url = el('WebhookUrl').value.trim();
+                    if (url && !isWebhookUrl(url)) {
+                        setMsg('slWebhookStatus', 'The webhook URL must start with http:// or https://', 'error');
+                        return false;
+                    }
+                    if (el('slWebhookStatus').classList.contains('sl-msg-error')) {
+                        setMsg('slWebhookStatus', '');
+                    }
+                    return true;
+                }
+
+                el('slTestWebhook').addEventListener('click', function () {
+                    var url = el('WebhookUrl').value.trim();
+                    if (!validateWebhookField()) {
+                        el('WebhookUrl').focus();
+                        return;
+                    }
+                    setMsg('slWebhookStatus', 'Sending a test…');
+                    ApiClient.fetch({
+                        type: 'POST',
+                        url: ApiClient.getUrl('StreamLimit/TestWebhook', url ? { url: url } : {}),
+                        dataType: 'json'
+                    }).then(function (result) {
+                        if (result && result.ok) {
+                            setMsg('slWebhookStatus', 'Test sent. The endpoint answered HTTP ' + result.status + '.', 'ok');
+                        } else {
+                            setMsg('slWebhookStatus', 'Test failed'
+                                + (result && result.status ? ' (HTTP ' + result.status + ')' : '')
+                                + (result && result.error ? ': ' + result.error : '') + '. Check the URL and that the endpoint is reachable from the server.', 'error');
+                        }
+                    }, function (err) {
+                        setMsg('slWebhookStatus', httpStatus(err) === 400
+                            ? 'Enter a webhook URL first (http:// or https://).'
+                            : 'The test could not be sent' + (httpStatus(err) ? ' (HTTP ' + httpStatus(err) + ')' : '') + '.', 'error');
+                    });
+                });
+
+                // ------------------------------- advanced ------------------------------
+                function renderAdvanced() {
+                    if (!savedConfig) {
+                        return;
+                    }
+                    el('slConfigVersion').textContent = String(savedConfig.ConfigVersion === undefined ? '–' : savedConfig.ConfigVersion);
+                    el('slExplicitCount').textContent = String(Object.keys(savedLimits).length);
+                    var raw = savedConfig.UserStreamLimits || '';
+                    try {
+                        raw = raw ? JSON.stringify(JSON.parse(raw), null, 2) : '';
+                    } catch (e) {
+                        // shown as stored
+                    }
+                    el('slRawLimits').value = raw || '(none)';
+                }
+
+                el('slRestoreDefaults').addEventListener('click', function () {
+                    FIELDS.forEach(function (field) {
+                        if (field.type === 'bool') {
+                            el(field.key).checked = field.def;
+                        }
+                    });
+                    updateDependencies();
+                    refreshEffectiveColumn();
+                    updateSaveBar();
+                    setMsg('slRestoreStatus', 'Switches set to their defaults. Press Save to keep them.', 'ok');
+                });
+
+                // ---------------------------- load and save ----------------------------
+                function applyLoaded(config) {
+                    savedConfig = config;
+                    savedValues = valuesFromConfig(config);
+                    savedLimits = parseLimits(config.UserStreamLimits);
+                    editedLimits = {};
+                    writeForm(savedValues);
+                    loaded = true;
+                    updateDependencies();
+                    updatePreview();
+                    renderAdvanced();
+                    renderUsers();
+                    updateSummary();
+                    updateSaveBar();
+                }
+
+                function loadSettings() {
+                    Dashboard.showLoadingMsg();
+                    var configPromise = ApiClient.getPluginConfiguration(pluginUniqueId);
+                    var usersPromise = ApiClient.getUsers().then(function (list) {
+                        users = (list || []).slice().sort(function (a, b) {
+                            return String(a.Name || '').localeCompare(String(b.Name || ''), undefined, { sensitivity: 'base' });
+                        });
+                        usersLoaded = true;
+                        setMsg('slUsersStatus', '');
+                    }, function () {
+                        users = [];
+                        usersLoaded = false;
+                        setMsg('slUsersStatus', 'The user list could not be loaded. Reload the page to edit per-user limits.', 'error');
+                    });
+
+                    Promise.all([configPromise, usersPromise]).then(function (results) {
+                        applyLoaded(results[0]);
+                        Dashboard.hideLoadingMsg();
+                    }, function () {
+                        Dashboard.hideLoadingMsg();
+                        el('slSummary').textContent = 'The settings could not be loaded. Reload the page.';
+                    });
+                }
+
+                el('slDiscard').addEventListener('click', function () {
+                    if (savedConfig && window.confirm('Discard every unsaved change?')) {
+                        applyLoaded(savedConfig);
+                        setMsg('slRestoreStatus', '');
+                        validateWebhookField();
+                    }
+                });
+
+                el('StreamLimiterConfigForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    if (!loaded) {
+                        return false;
+                    }
+
+                    var values = readForm();
+                    if (values.WebhookUrl && !isWebhookUrl(values.WebhookUrl)) {
+                        selectTab('notifications', false);
+                        validateWebhookField();
+                        el('WebhookUrl').focus();
+                        el('slSaveState').textContent = 'Not saved: fix the webhook URL first.';
+                        return false;
+                    }
+
+                    var changedKeys = dirtyLimitKeys();
+                    Dashboard.showLoadingMsg();
+
+                    // Start from the server's current config so fields this page doesn't show
+                    // (ConfigVersion, anything newer) are kept, and only the edited per-user
+                    // limits are applied on top of the stored map.
+                    ApiClient.getPluginConfiguration(pluginUniqueId).then(function (config) {
+                        FIELDS.forEach(function (field) {
+                            config[field.key] = values[field.key];
+                        });
+                        var limits = parseLimits(config.UserStreamLimits);
+                        changedKeys.forEach(function (key) {
+                            if (editedLimits[key] > 0) {
+                                limits[key] = editedLimits[key];
+                            } else {
+                                delete limits[key];
+                            }
+                        });
+                        config.UserStreamLimits = JSON.stringify(limits);
+
+                        return ApiClient.updatePluginConfiguration(pluginUniqueId, config).then(function (result) {
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                            applyLoaded(config);
+                            el('slSaveState').textContent = 'Saved at ' + formatTime(new Date()) + '.';
+                            setMsg('slRestoreStatus', '');
+                        });
+                    }).then(null, function (err) {
+                        Dashboard.hideLoadingMsg();
+                        el('slSaveState').textContent = 'Not saved: the server refused the settings'
+                            + (httpStatus(err) ? ' (HTTP ' + httpStatus(err) + ')' : '') + '. Try again.';
+                    });
+
+                    return false;
+                });
+
+                // ----------------------------- live streams ----------------------------
                 // Every value is written with textContent: user, device and item names come
                 // from clients and must never be interpreted as markup.
                 var refreshTimer = null;
+                var refreshTick = 0;
                 var pageVisible = false;
+                // Start time of the pending ActiveStreams request (0 = none): no overlapping
+                // polls, but a request that never settles does not block refreshing forever.
+                var requestStarted = 0;
 
-                function cell(row, text, className) {
-                    var td = document.createElement('td');
-                    if (className) {
-                        td.className = className;
+                var REASONS = {
+                    playing: { label: 'Playing', title: 'The app reports playback.' },
+                    streaming: { label: 'Streaming', title: 'Media is being downloaded without a playback report (external player or HTTP only).' },
+                    recent: { label: 'Recently active', title: 'No playback report or download right now; still counted for a short grace period.' },
+                    stopped: { label: 'Stopped by the limiter', title: 'Stopped recently; not counted even if the app still reports it.' }
+                };
+
+                function streamReason(stream) {
+                    if (stream.reason && REASONS[stream.reason]) {
+                        return stream.reason;
                     }
-                    if (text !== null && text !== undefined) {
-                        td.textContent = String(text);
+                    // Older plugin versions: derive from enforced/source.
+                    if (stream.enforced) {
+                        return 'stopped';
                     }
-                    row.appendChild(td);
-                    return td;
+                    return stream.source === 'slot' ? 'streaming' : 'playing';
                 }
 
-                function formatTime(iso) {
-                    if (!iso) {
-                        return '';
-                    }
-                    var date = new Date(iso);
-                    return isNaN(date.getTime()) ? '' : date.toLocaleTimeString();
+                function isCounted(stream) {
+                    return typeof stream.counted === 'boolean' ? stream.counted : !stream.enforced;
                 }
 
-                function setStatus(id, text) {
-                    document.getElementById(id).textContent = text || '';
+                function playMethodLabel(method) {
+                    switch (method) {
+                        case 'DirectPlay': return 'Direct play';
+                        case 'DirectStream': return 'Direct stream';
+                        case 'Transcode': return 'Transcode';
+                        default: return '';
+                    }
+                }
+
+                function metaItem(list, label, value) {
+                    if (value === null || value === undefined || value === '') {
+                        return;
+                    }
+                    var wrap = make('div');
+                    wrap.appendChild(make('dt', null, label));
+                    wrap.appendChild(make('dd', null, value));
+                    list.appendChild(wrap);
+                }
+
+                function displayName(user) {
+                    return user.userName || user.userId;
                 }
 
                 function kick(user, stream, logout) {
-                    var who = (user.userName || user.userId) + ' on ' + (stream.deviceName || stream.deviceId);
+                    var who = displayName(user) + ' on ' + (stream.deviceName || stream.deviceId);
                     var question = logout
                         ? 'Stop the stream of ' + who + ' and log this device out? The user will have to sign in again on it.'
                         : 'Stop the stream of ' + who + '?';
@@ -361,113 +1325,211 @@
                         url: ApiClient.getUrl('StreamLimit/KickStream', { userId: user.userId, deviceId: stream.deviceId, logout: logout }),
                         dataType: 'json'
                     }).then(function (result) {
-                        setStatus('slActiveStatus', 'Stopped ' + who + ': ' + result.stopped + ' session(s) stopped'
-                            + (result.aborted ? ', ' + result.aborted + ' download(s) cut' : '') + (result.released ? ', slot released' : '') + (result.loggedOut ? ', device logged out' : '') + '.');
+                        result = result || {};
+                        setMsg('slLiveStatus', 'Stopped ' + who + ': ' + plural(result.stopped || 0, 'session') + ' stopped'
+                            + (result.aborted ? ', ' + plural(result.aborted, 'download') + ' cut' : '')
+                            + (result.released ? ', slot freed' : '')
+                            + (result.loggedOut ? ', device logged out' : '') + '.', 'ok');
                         refreshActive();
-                    }, function () {
-                        setStatus('slActiveStatus', 'Could not stop the stream of ' + who + '.');
+                    }, function (err) {
+                        setMsg('slLiveStatus', 'Could not stop the stream of ' + who
+                            + (httpStatus(err) ? ' (HTTP ' + httpStatus(err) + ')' : '') + '.', 'error');
                     });
                 }
 
-                function actionButton(label, onClick) {
-                    var button = document.createElement('button');
-                    button.type = 'button';
-                    button.setAttribute('is', 'emby-button');
-                    button.className = 'raised emby-button';
-                    button.textContent = label;
-                    button.addEventListener('click', onClick);
-                    return button;
-                }
-
-                function renderActive(users) {
-                    var container = document.getElementById('slActiveStreams');
-                    container.textContent = '';
-                    if (!users || !users.length) {
-                        var empty = document.createElement('p');
-                        empty.className = 'slMuted';
-                        empty.textContent = 'No active streams.';
-                        container.appendChild(empty);
+                function resetUser(user) {
+                    var name = displayName(user);
+                    if (!window.confirm('Reset the stream count of ' + name + '? This frees every slot they hold and cuts their downloads in progress. Apps that are really playing will be counted again at their next report.')) {
                         return;
                     }
-
-                    var table = document.createElement('table');
-                    table.className = 'slTable';
-                    var head = document.createElement('tr');
-                    ['Device', 'Client', 'Playing', 'Method', 'IP address', 'Last activity', ''].forEach(function (title) {
-                        var th = document.createElement('th');
-                        th.textContent = title;
-                        head.appendChild(th);
+                    ApiClient.fetch({
+                        type: 'POST',
+                        url: ApiClient.getUrl('StreamLimit/ResetUserStreams', { userId: user.userId }),
+                        dataType: 'json'
+                    }).then(function (result) {
+                        result = result || {};
+                        setMsg('slLiveStatus', 'Reset ' + name + ': ' + plural(result.released || 0, 'slot') + ' freed'
+                            + (result.aborted ? ', ' + plural(result.aborted, 'download') + ' cut' : '') + '.', 'ok');
+                        refreshActive();
+                    }, function (err) {
+                        var status = httpStatus(err);
+                        setMsg('slLiveStatus', status === 404
+                            ? 'Reset is not available: update the plugin on the server.'
+                            : 'Could not reset ' + name + (status ? ' (HTTP ' + status + ')' : '') + '.', 'error');
                     });
-                    var thead = document.createElement('thead');
-                    thead.appendChild(head);
-                    table.appendChild(thead);
-                    var body = document.createElement('tbody');
+                }
 
-                    users.forEach(function (user) {
-                        var counted = user.streams.filter(function (s) { return !s.enforced; }).length;
-                        var limitText = user.exempt ? 'exempt (administrator)'
-                            : user.limit > 0 ? counted + ' / ' + user.limit + ' streams' : counted + ' stream(s), unlimited';
-                        var userRow = document.createElement('tr');
-                        userRow.className = 'slUserRow';
-                        var userCell = cell(userRow, (user.userName || user.userId) + ' — ' + limitText);
-                        userCell.colSpan = 7;
-                        body.appendChild(userRow);
+                function userBadge(user) {
+                    var counted = countedStreams(user);
+                    var badge = make('span', 'sl-badge');
+                    if (user.exempt) {
+                        badge.textContent = 'Exempt';
+                        badge.title = 'Administrator: never limited';
+                    } else if (user.limit > 0) {
+                        badge.textContent = counted + ' / ' + user.limit;
+                        badge.title = counted + ' counted of ' + plural(user.limit, 'stream') + ' allowed';
+                        if (counted > user.limit) {
+                            badge.classList.add('sl-badge-over');
+                        } else if (counted === user.limit) {
+                            badge.classList.add('sl-badge-full');
+                        }
+                    } else {
+                        badge.textContent = counted + ' / no limit';
+                        badge.title = counted + ' counted, no limit applies';
+                    }
+                    return badge;
+                }
 
-                        user.streams.forEach(function (stream) {
-                            var row = document.createElement('tr');
-                            var deviceCell = cell(row, stream.deviceName || stream.deviceId);
-                            if (stream.enforced) {
-                                var tag = document.createElement('span');
-                                tag.className = 'slTag';
-                                tag.textContent = 'stopped, not counted';
-                                deviceCell.appendChild(tag);
-                            }
-                            if (stream.source === 'slot') {
-                                var slotTag = document.createElement('span');
-                                slotTag.className = 'slTag';
-                                slotTag.textContent = 'HTTP only';
-                                deviceCell.appendChild(slotTag);
-                            }
-                            cell(row, stream.client);
-                            cell(row, stream.itemName);
-                            cell(row, stream.playMethod === 'unknown' ? '' : stream.playMethod);
-                            cell(row, stream.remoteEndPoint);
-                            cell(row, formatTime(stream.lastActivity));
-                            var actions = cell(row, null, 'slActions');
-                            actions.appendChild(actionButton('Stop', function () { kick(user, stream, false); }));
-                            actions.appendChild(actionButton('Stop + log out', function () { kick(user, stream, true); }));
-                            body.appendChild(row);
+                function renderDevice(user, stream) {
+                    var reason = streamReason(stream);
+                    var counted = isCounted(stream);
+                    var keyBase = user.userId + '|' + stream.deviceId;
+
+                    var row = make('div', 'listItem listItem-border sl-device');
+                    row.setAttribute('data-action', 'none');
+                    var body = make('div', 'listItemBody');
+
+                    var line = make('div', 'sl-deviceLine');
+                    line.appendChild(make('span', 'sl-deviceName', stream.deviceName || stream.deviceId));
+                    var chip = make('span', 'sl-chip sl-chip-' + reason);
+                    chip.title = REASONS[reason].title;
+                    chip.appendChild(make('span', 'sl-dot'));
+                    var chipText = REASONS[reason].label;
+                    if (reason === 'recent' && typeof stream.idleSeconds === 'number') {
+                        chipText += ', idle ' + formatIdle(stream.idleSeconds);
+                    }
+                    chip.appendChild(document.createTextNode(chipText));
+                    line.appendChild(chip);
+                    line.appendChild(make('span', 'sl-counted sl-muted', counted ? 'counted' : 'not counted'));
+                    body.appendChild(line);
+
+                    if (stream.itemName) {
+                        body.appendChild(make('div', 'sl-item secondary', stream.itemName));
+                    }
+
+                    var meta = make('dl', 'sl-meta secondary');
+                    metaItem(meta, 'App', stream.client);
+                    metaItem(meta, 'Method', playMethodLabel(stream.playMethod));
+                    metaItem(meta, 'IP', stream.remoteEndPoint);
+                    if (reason !== 'recent' && typeof stream.idleSeconds === 'number') {
+                        metaItem(meta, 'Idle', formatIdle(stream.idleSeconds));
+                    }
+                    if (typeof stream.openResponses === 'number' && stream.openResponses > 0) {
+                        metaItem(meta, 'Downloads', String(stream.openResponses));
+                    }
+                    if (stream.lastActivity) {
+                        metaItem(meta, 'Last activity', formatTime(new Date(stream.lastActivity)));
+                    }
+                    if (meta.childNodes.length) {
+                        body.appendChild(meta);
+                    }
+                    row.appendChild(body);
+
+                    var actions = make('div', 'sl-deviceActions');
+                    var stop = smallButton('Stop', null, function () { kick(user, stream, false); });
+                    stop.setAttribute('data-sl-key', keyBase + '|stop');
+                    stop.setAttribute('aria-label', 'Stop the stream on ' + (stream.deviceName || stream.deviceId));
+                    var logout = smallButton('Stop + log out', null, function () { kick(user, stream, true); });
+                    logout.setAttribute('data-sl-key', keyBase + '|logout');
+                    logout.setAttribute('aria-label', 'Stop the stream on ' + (stream.deviceName || stream.deviceId) + ' and log the device out');
+                    actions.appendChild(stop);
+                    actions.appendChild(logout);
+                    row.appendChild(actions);
+                    return row;
+                }
+
+                function renderActive(list) {
+                    var container = el('slActiveStreams');
+                    // Keep keyboard focus across the 5-second re-render.
+                    var focused = document.activeElement;
+                    var focusKey = focused && container.contains(focused) ? focused.getAttribute('data-sl-key') : null;
+
+                    container.textContent = '';
+                    if (!list.length) {
+                        var empty = make('div', 'paperList sl-empty');
+                        empty.appendChild(make('p', null, 'Nobody is streaming right now.'));
+                        empty.appendChild(make('p', 'fieldDescription', 'Streams show up here within a few seconds of playback starting.'));
+                        container.appendChild(empty);
+                    }
+
+                    list.forEach(function (user) {
+                        var card = make('div', 'paperList sl-userCard');
+                        var head = make('div', 'sl-userHead');
+                        head.appendChild(make('h3', 'sl-userName', displayName(user)));
+                        head.appendChild(userBadge(user));
+                        head.appendChild(make('span', 'sl-spacer'));
+                        var reset = smallButton('Reset', 'button-flat', function () { resetUser(user); });
+                        reset.classList.remove('raised');
+                        reset.setAttribute('data-sl-key', user.userId + '|reset');
+                        reset.setAttribute('aria-label', 'Reset the stream count of ' + displayName(user));
+                        reset.title = 'Free every slot this user holds';
+                        head.appendChild(reset);
+                        card.appendChild(head);
+
+                        (user.streams || []).forEach(function (stream) {
+                            card.appendChild(renderDevice(user, stream));
                         });
+                        container.appendChild(card);
                     });
 
-                    table.appendChild(body);
-                    container.appendChild(table);
+                    if (focusKey) {
+                        var again = container.querySelector('[data-sl-key="' + focusKey.replace(/["\\]/g, '\\$&') + '"]');
+                        if (again) {
+                            again.focus();
+                        }
+                    }
                 }
 
                 function refreshActive() {
+                    if (requestStarted && Date.now() - requestStarted < 20000) {
+                        return;
+                    }
+                    requestStarted = Date.now();
                     ApiClient.fetch({
                         type: 'GET',
                         url: ApiClient.getUrl('StreamLimit/ActiveStreams'),
                         dataType: 'json'
-                    }).then(renderActive, function () {
-                        setStatus('slActiveStatus', 'Could not load the active streams.');
+                    }).then(function (list) {
+                        requestStarted = 0;
+                        liveData = Array.isArray(list) ? list : [];
+                        renderActive(liveData);
+                        el('slUpdated').textContent = 'Updated ' + formatTime(new Date()) + '. Refreshes every 5 seconds.';
+                        if (el('slLiveStatus').classList.contains('sl-msg-error') && el('slLiveStatus').getAttribute('data-sl-load-error')) {
+                            setMsg('slLiveStatus', '');
+                        }
+                        el('slLiveStatus').removeAttribute('data-sl-load-error');
+                        updateSummary();
+                    }, function (err) {
+                        requestStarted = 0;
+                        setMsg('slLiveStatus', 'Could not load the active streams' + (httpStatus(err) ? ' (HTTP ' + httpStatus(err) + ')' : '')
+                            + '. Retrying every 5 seconds.', 'error');
+                        el('slLiveStatus').setAttribute('data-sl-load-error', '1');
+                        if (!liveData) {
+                            el('slActiveStreams').textContent = '';
+                        }
                     });
+                }
+
+                function tick() {
+                    // Stop once the page has been left without a hide event.
+                    if (!page.isConnected) {
+                        stopRefresh();
+                        return;
+                    }
+                    refreshTick++;
+                    if (activeTab === 'live' || refreshTick % BACKGROUND_REFRESH_EVERY === 0) {
+                        refreshActive();
+                    }
                 }
 
                 function startRefresh() {
                     stopRefresh();
-                    if (!pageVisible || document.hidden) {
+                    if (!pageVisible || document.hidden || !page.isConnected) {
                         return;
                     }
+                    refreshTick = 0;
                     refreshActive();
-                    refreshTimer = setInterval(function () {
-                        // Stop once the page has been left without a hide event.
-                        if (!document.getElementById('slActiveStreams')) {
-                            stopRefresh();
-                            return;
-                        }
-                        refreshActive();
-                    }, 5000);
+                    refreshTimer = setInterval(tick, REFRESH_MS);
                 }
 
                 function stopRefresh() {
@@ -477,95 +1539,43 @@
                     }
                 }
 
-                var configPage = document.querySelector('#StreamLimiterConfigPage');
-                configPage.addEventListener('pageshow', function () { pageVisible = true; startRefresh(); });
-                configPage.addEventListener('viewshow', function () { pageVisible = true; startRefresh(); });
-                ['pagehide', 'viewhide', 'viewbeforehide'].forEach(function (name) {
-                    configPage.addEventListener(name, function () { pageVisible = false; stopRefresh(); });
+                el('slRefreshNow').addEventListener('click', refreshActive);
+
+                // ------------------------------ page events ----------------------------
+                page.addEventListener('pageshow', function () {
+                    pageVisible = true;
+                    loadSettings();
+                    startRefresh();
                 });
-                document.addEventListener('visibilitychange', function () {
+                page.addEventListener('viewshow', function () {
+                    pageVisible = true;
+                    startRefresh();
+                });
+                ['pagehide', 'viewhide', 'viewbeforehide', 'viewdestroy'].forEach(function (name) {
+                    page.addEventListener(name, function () {
+                        pageVisible = false;
+                        stopRefresh();
+                    });
+                });
+
+                function onVisibilityChange() {
+                    if (!page.isConnected) {
+                        // This instance is gone: drop the global listener too.
+                        stopRefresh();
+                        document.removeEventListener('visibilitychange', onVisibilityChange);
+                        return;
+                    }
                     if (document.hidden) {
                         stopRefresh();
                     } else {
                         startRefresh();
                     }
-                });
+                }
+                document.addEventListener('visibilitychange', onVisibilityChange);
 
-                // ----------------------------- Webhook test ------------------------------
-                document.getElementById('slTestWebhook').addEventListener('click', function () {
-                    var url = document.getElementById('WebhookUrl').value.trim();
-                    if (url && !isWebhookUrl(url)) {
-                        setStatus('slWebhookStatus', 'The webhook URL must start with http:// or https://');
-                        return;
-                    }
-                    setStatus('slWebhookStatus', 'Sending…');
-                    ApiClient.fetch({
-                        type: 'POST',
-                        url: ApiClient.getUrl('StreamLimit/TestWebhook', url ? { url: url } : {}),
-                        dataType: 'json'
-                    }).then(function (result) {
-                        setStatus('slWebhookStatus', result.ok
-                            ? 'Test sent (HTTP ' + result.status + ').'
-                            : 'Test failed' + (result.status ? ' (HTTP ' + result.status + ')' : '') + (result.error ? ': ' + result.error : '') + '.');
-                    }, function () {
-                        setStatus('slWebhookStatus', 'No valid webhook URL to test.');
-                    });
-                });
-
-                document.querySelector('#StreamLimiterConfigForm').addEventListener('submit', function (e) {
-                    e.preventDefault();
-
-                    var webhookUrl = document.getElementById('WebhookUrl').value.trim();
-                    if (webhookUrl && !isWebhookUrl(webhookUrl)) {
-                        Dashboard.alert('The webhook URL must start with http:// or https://');
-                        return false;
-                    }
-
-                    Dashboard.showLoadingMsg();
-
-                    var ddlUsers = document.getElementById('Users');
-                    var selectedKey = normalizeKey(ddlUsers.value);
-                    var streams = parseInt(document.getElementById('MaxStreams').value, 10);
-
-                    if (selectedKey) {
-                        if (!isNaN(streams) && streams > 0) {
-                            usersWithValues[selectedKey] = streams;
-                        } else {
-                            delete usersWithValues[selectedKey];
-                        }
-                    }
-
-                    ApiClient.getPluginConfiguration(pluginUniqueId).then(function (config) {
-                        var defaultMax = parseInt(document.getElementById('DefaultMaxStreams').value, 10);
-
-                        config.UserStreamLimits = JSON.stringify(usersWithValues);
-                        config.DefaultMaxStreams = (!isNaN(defaultMax) && defaultMax > 0) ? defaultMax : 0;
-                        config.EnableHardBlock = document.getElementById('EnableHardBlock').checked;
-                        config.BlockPlaybackInfo = document.getElementById('BlockPlaybackInfo').checked;
-                        config.BlockUnidentifiedRequests = document.getElementById('BlockUnidentifiedRequests').checked;
-                        config.KillTranscodeJobs = document.getElementById('KillTranscodeJobs').checked;
-                        config.ForceLogoutOnLimit = document.getElementById('ForceLogoutOnLimit').checked;
-                        config.ExemptAdministrators = document.getElementById('ExemptAdministrators').checked;
-                        config.LogBlocksToActivity = document.getElementById('LogBlocksToActivity').checked;
-                        config.EnableWebMessage = document.getElementById('EnableWebMessage').checked;
-                        config.ShowLimitPopup = document.getElementById('ShowLimitPopup').checked;
-                        config.MessageTitle = document.getElementById('MessageTitle').value;
-                        config.MessageText = document.getElementById('MessageText').value;
-                        config.WebhookUrl = webhookUrl;
-                        config.WebhookOnBlock = document.getElementById('WebhookOnBlock').checked;
-                        config.WebhookOnAdminKick = document.getElementById('WebhookOnAdminKick').checked;
-
-                        ApiClient.updatePluginConfiguration(pluginUniqueId, config).then(function (result) {
-                            Dashboard.processPluginConfigurationUpdateResult(result);
-                            populateUserDropdown(ddlUsers.value);
-                        }, function () {
-                            Dashboard.hideLoadingMsg();
-                            Dashboard.alert('The settings could not be saved.');
-                        });
-                    });
-
-                    return false;
-                });
+                // Remembered tab (falls back to Live), without starting the timer before the page shows.
+                var storedTab = storageGet(TAB_STORAGE_KEY);
+                selectTab(TABS.indexOf(storedTab) !== -1 ? storedTab : 'live', false);
             })();
         </script>
     </div>

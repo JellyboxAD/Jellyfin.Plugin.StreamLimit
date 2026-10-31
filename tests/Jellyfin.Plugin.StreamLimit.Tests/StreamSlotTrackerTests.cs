@@ -82,20 +82,39 @@ public class StreamSlotTrackerTests
     }
 
     [Fact]
-    public void InFlightResponse_HoldsSlotPastTtl()
+    public void WritingResponse_HoldsSlotPastTtl()
     {
+        var tracker = CreateTracker(ttlSeconds: 60);
+        tracker.TryEnter(User, "device-a", 1, NoSessions);
+        var request = tracker.BeginRequest(User, "device-a");
+
+        // A direct-play download issues one request lasting the whole movie, writing all along.
+        for (var i = 0; i < 120; i++)
+        {
+            _clock.Advance(TimeSpan.FromMinutes(1));
+            tracker.Touch(request);
+        }
+
+        Assert.False(tracker.TryEnter(User, "device-b", 1, NoSessions));
+
+        tracker.EndRequest(User, "device-a", request);
+        _clock.Advance(TimeSpan.FromSeconds(61));
+
+        Assert.True(tracker.TryEnter(User, "device-b", 1, NoSessions));
+    }
+
+    [Fact]
+    public void OpenResponseWithoutBytes_StopsCountingAfterTheActivityWindow()
+    {
+        // Half-open connection, paused player, Jellyfin segment wait: open but silent.
         var tracker = CreateTracker(ttlSeconds: 60);
         tracker.TryEnter(User, "device-a", 1, NoSessions);
         tracker.BeginRequest(User, "device-a");
 
-        // A direct-play download issues one request lasting the whole movie.
-        _clock.Advance(TimeSpan.FromHours(2));
-
+        _clock.Advance(StreamSlotTracker.ActiveResponseWindow - TimeSpan.FromSeconds(1));
         Assert.False(tracker.TryEnter(User, "device-b", 1, NoSessions));
 
-        tracker.EndRequest(User, "device-a");
-        _clock.Advance(TimeSpan.FromSeconds(61));
-
+        _clock.Advance(TimeSpan.FromSeconds(2));
         Assert.True(tracker.TryEnter(User, "device-b", 1, NoSessions));
     }
 
@@ -144,12 +163,13 @@ public class StreamSlotTrackerTests
         Assert.True(tracker.TryEnter(User, "device-a", 1, NoSessions));
         tracker.ReleaseDevice(User, "device-a");
 
-        tracker.BeginRequest(User, "device-a");
-        _clock.Advance(TimeSpan.FromHours(1));
+        var request = tracker.BeginRequest(User, "device-a");
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        tracker.Touch(request);
 
         Assert.False(tracker.TryEnter(User, "device-b", 1, NoSessions));
 
-        tracker.EndRequest(User, "device-a");
+        tracker.EndRequest(User, "device-a", request);
         _clock.Advance(TimeSpan.FromSeconds(61));
         Assert.True(tracker.TryEnter(User, "device-b", 1, NoSessions));
     }
@@ -190,13 +210,15 @@ public class StreamSlotTrackerTests
     }
 
     [Fact]
-    public void InFlightSlot_IsNotEvictedByTheAbandonedSweep()
+    public void WritingSlot_IsNotEvictedByTheAbandonedSweep()
     {
         var tracker = CreateTracker(ttlSeconds: 60);
         tracker.TryEnter(User, "device-a", 1, NoSessions);
-        tracker.BeginRequest(User, "device-a");
+        var request = tracker.BeginRequest(User, "device-a");
 
-        _clock.Advance(TimeSpan.FromMinutes(30));
+        _clock.Advance(TimeSpan.FromSeconds(80));
+        tracker.Touch(request);
+        _clock.Advance(TimeSpan.FromSeconds(80));
 
         Assert.False(tracker.TryEnter(User, "device-b", 1, NoSessions));
     }

@@ -29,7 +29,12 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<StreamEnforcer>();
         serviceCollection.AddSingleton<BlockActivityLogger>();
         serviceCollection.AddSingleton<WebhookNotifier>();
+        serviceCollection.AddSingleton<BlockMessenger>();
         serviceCollection.AddSingleton<StreamGateFilter>();
+
+        // Prunes slots, idle responses, registries and throttles every minute, so the live
+        // view and memory stay clean even for users who never come back.
+        serviceCollection.AddHostedService<StreamLimitHousekeeping>();
 
         // Hard block: hook the gate into MVC as a global resource filter. Jellyfin
         // configures MvcOptions with a plain Configure delegate and never locks it,

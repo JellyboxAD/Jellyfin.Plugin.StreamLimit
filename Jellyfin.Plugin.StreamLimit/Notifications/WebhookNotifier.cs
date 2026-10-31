@@ -52,6 +52,11 @@ public sealed class WebhookNotifier
     }
 
     /// <summary>
+    /// Drops expired throttle entries (periodic housekeeping).
+    /// </summary>
+    public void PruneThrottle() => _throttle.Prune();
+
+    /// <summary>
     /// Notifies a blocked stream, unless no webhook is set, block notifications are off, or
     /// this user and device were notified recently.
     /// </summary>

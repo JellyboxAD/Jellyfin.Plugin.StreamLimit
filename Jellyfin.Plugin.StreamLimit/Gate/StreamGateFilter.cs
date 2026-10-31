@@ -16,6 +16,7 @@ using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.MediaInfo;
 using MediaBrowser.Model.Session;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Filters;
@@ -39,7 +40,7 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
     private readonly EnforcedDeviceRegistry _enforcedDevices;
     private readonly BlockActivityLogger _activityLogger;
     private readonly WebhookNotifier _webhookNotifier;
-    private readonly StreamEnforcer _enforcer;
+    private readonly BlockMessenger _messenger;
     private readonly IUserManager _userManager;
     private readonly StreamLimitManager _limitManager;
     private readonly ISessionManager _sessionManager;
@@ -47,7 +48,6 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
     private readonly IDeviceManager _deviceManager;
     private readonly ILibraryManager _libraryManager;
     private readonly ILogger<StreamGateFilter> _logger;
-    private readonly KeyedThrottle _notifyThrottle = new(TimeSpan.FromSeconds(30));
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StreamGateFilter"/> class.
@@ -56,7 +56,7 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
     /// <param name="enforcedDevices">The devices the reactive limiter just stopped.</param>
     /// <param name="activityLogger">The activity log writer for blocked streams.</param>
     /// <param name="webhookNotifier">The webhook notifier.</param>
-    /// <param name="enforcer">The shared stop actions (display message).</param>
+    /// <param name="messenger">The blocked-message sender.</param>
     /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
     /// <param name="limitManager">The stream limit manager.</param>
     /// <param name="sessionManager">Instance of the <see cref="ISessionManager"/> interface.</param>
@@ -69,7 +69,7 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
         EnforcedDeviceRegistry enforcedDevices,
         BlockActivityLogger activityLogger,
         WebhookNotifier webhookNotifier,
-        StreamEnforcer enforcer,
+        BlockMessenger messenger,
         IUserManager userManager,
         StreamLimitManager limitManager,
         ISessionManager sessionManager,
@@ -82,7 +82,7 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
         _enforcedDevices = enforcedDevices;
         _activityLogger = activityLogger;
         _webhookNotifier = webhookNotifier;
-        _enforcer = enforcer;
+        _messenger = messenger;
         _userManager = userManager;
         _limitManager = limitManager;
         _sessionManager = sessionManager;
@@ -191,17 +191,66 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
         // legitimate stream again and its session must count normally.
         _enforcedDevices.ClearOnReentry(userId, deviceId);
 
-        // Hold the slot for the whole response: a direct-play download is a single
-        // request that can last hours and must keep counting the entire time.
-        // The abort handle lets an admin kick cut this response immediately.
-        var registration = _tracker.BeginRequest(userId, deviceId, context.HttpContext.Abort);
+        // Hold the slot while the response really streams: a direct-play download is a
+        // single request that can last hours and keeps counting as long as it writes bytes.
+        // An open response that writes nothing (half-open connection, paused player, a
+        // Jellyfin segment wait that ignores the client's disconnect) stops counting after
+        // StreamSlotTracker.ActiveResponseWindow. The abort handle lets an admin kick (and
+        // the idle abort) cut this response; once the request is aborted or completed the
+        // registration never counts again.
+        var httpContext = context.HttpContext;
+        var registration = _tracker.BeginRequest(userId, deviceId, httpContext.Abort, httpContext.RequestAborted);
+        IHttpResponseBodyFeature? originalBody = null;
         try
         {
+            // Ends the registration even if this filter's continuation never runs.
+            httpContext.Response.OnCompleted(
+                static state =>
+                {
+                    var (tracker, user, device, request) = ((StreamSlotTracker, Guid, string, StreamSlotTracker.MediaRequest))state;
+                    tracker.EndRequest(user, device, request);
+                    return Task.CompletedTask;
+                },
+                (_tracker, userId, deviceId, registration));
+
+            originalBody = WrapResponseBody(httpContext, registration);
             await next().ConfigureAwait(false);
         }
         finally
         {
+            if (originalBody is not null)
+            {
+                httpContext.Features.Set(originalBody);
+            }
+
             _tracker.EndRequest(userId, deviceId, registration);
+        }
+    }
+
+    // Routes the response body through an ActivityStream so the tracker sees when bytes are
+    // actually written. StreamResponseBodyFeature passes StartAsync/CompleteAsync through the
+    // stream and serves SendFileAsync (PhysicalFileResult) by copying through it, exactly like
+    // ASP.NET's own response-compression wrapper. Fails open: on any problem the response is
+    // left untouched (it still counts by its start and end).
+    private IHttpResponseBodyFeature? WrapResponseBody(HttpContext httpContext, StreamSlotTracker.MediaRequest registration)
+    {
+        try
+        {
+            var original = httpContext.Features.Get<IHttpResponseBodyFeature>();
+            if (original is null)
+            {
+                return null;
+            }
+
+            var tracker = _tracker;
+            var activity = new ActivityStream(original.Stream, () => tracker.Touch(registration));
+            httpContext.Features.Set<IHttpResponseBodyFeature>(new StreamResponseBodyFeature(activity, original));
+            return original;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Stream gate could not observe the response body");
+            return null;
         }
     }
 
@@ -432,30 +481,9 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
 
     private void NotifyDeviceThrottled(Guid userId, string deviceId, (string Title, string Text) message)
     {
-        // Off by default: the client already shows its own "not allowed" dialog on a
-        // hard block, so an extra popup is redundant. See PluginConfiguration.ShowLimitPopup.
-        if (Plugin.Instance?.Configuration.ShowLimitPopup != true)
-        {
-            return;
-        }
-
-        if (!_notifyThrottle.TryAcquire(KeyedThrottle.UserDeviceKey(userId, deviceId)))
-        {
-            return;
-        }
-
-        var sessions = _sessionManager.Sessions
-            .Where(s => s.UserId.Equals(userId)
-                        && string.Equals(s.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-
-        // Best effort, detached: denial responses must not wait on message delivery.
-        _ = Task.Run(async () =>
-        {
-            foreach (var session in sessions)
-            {
-                await _enforcer.SendMessageAsync(session, message.Title, message.Text, "gate").ConfigureAwait(false);
-            }
-        });
+        // Native apps get the server message (they cannot show the injected popup), web
+        // clients only with ShowLimitPopup; see MessageTargets. Best effort, detached: denial
+        // responses must not wait on message delivery.
+        _ = Task.Run(() => _messenger.NotifyAsync(userId, deviceId, message.Title, message.Text, "gate"));
     }
 }

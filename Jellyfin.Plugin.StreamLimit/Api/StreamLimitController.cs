@@ -139,14 +139,12 @@ public class StreamLimitController : ControllerBase
         _enforcedDevices.Record(userGuid, deviceId);
         // Cut the device's media responses still streaming (a direct-play download is one
         // long request) and free its slot now, instead of waiting for the abandoned-slot rule.
-        var (aborted, released) = _tracker.AbortDevice(userGuid, deviceId);
+        var (aborted, stale, released) = _tracker.AbortDevice(userGuid, deviceId);
         var target = sessions.FirstOrDefault();
         var loggedOut = logout
                         && await _enforcer.LogoutDeviceAsync(userGuid, target?.DeviceId ?? deviceId, "admin").ConfigureAwait(false);
 
-        var adminId = Guid.TryParse(User.Claims.FirstOrDefault(c => c.Type == "Jellyfin-UserId")?.Value, out var parsedAdmin)
-            ? parsedAdmin
-            : Guid.Empty;
+        var adminId = GetCallerId();
         var adminName = _limitManager.GetUserName(adminId);
         var kicked = new BlockedStream(
             userGuid,
@@ -161,17 +159,51 @@ public class StreamLimitController : ControllerBase
         _webhookNotifier.NotifyAdminKick(adminName, kicked);
 
         _logger.LogInformation(
-            "Admin {Admin} stopped the stream of user {UserId} on device {DeviceId}: {Stopped} session(s) stopped, {Aborted} response(s) aborted, slot released: {Released}, logged out: {LoggedOut}",
+            "Admin {Admin} stopped the stream of user {UserId} on device {DeviceId}: {Stopped} session(s) stopped, {Aborted} live response(s) aborted, {Stale} stale registration(s) cleared, slot released: {Released}, logged out: {LoggedOut}",
             adminName,
             userGuid,
             deviceId,
             stopped,
             aborted,
+            stale,
             released,
             loggedOut);
 
-        return Ok(new { stopped, aborted, released, loggedOut });
+        return Ok(new { stopped, aborted, stale, released, loggedOut });
     }
+
+    /// <summary>
+    /// Last-resort fix for a user wrongly counted as streaming: releases all of the user's gate
+    /// slots (aborting their open media responses) and clears the devices the plugin stopped,
+    /// so only what Jellyfin really reports counts again. Playing sessions are left alone.
+    /// </summary>
+    /// <param name="userId">The user id (with or without dashes).</param>
+    /// <returns>The number of slots released and of live responses aborted.</returns>
+    [HttpPost]
+    public IActionResult ResetUserStreams([FromQuery] string userId)
+    {
+        if (!Guid.TryParse(userId, out var userGuid) || userGuid.Equals(Guid.Empty))
+        {
+            return BadRequest("Invalid user id");
+        }
+
+        var (released, aborted, stale) = _tracker.ResetUser(userGuid);
+        var enforcedCleared = _enforcedDevices.ClearUser(userGuid);
+
+        _logger.LogInformation(
+            "Admin {Admin} reset the streams of user {UserId}: {Released} slot(s) released, {Aborted} live response(s) aborted, {Stale} stale registration(s) cleared, {Enforced} stopped device(s) cleared",
+            _limitManager.GetUserName(GetCallerId()),
+            userGuid,
+            released,
+            aborted,
+            stale,
+            enforcedCleared);
+
+        return Ok(new { released, aborted });
+    }
+
+    private Guid GetCallerId()
+        => Guid.TryParse(User.Claims.FirstOrDefault(c => c.Type == "Jellyfin-UserId")?.Value, out var id) ? id : Guid.Empty;
 
     /// <summary>
     /// Sends a test notification to a webhook.

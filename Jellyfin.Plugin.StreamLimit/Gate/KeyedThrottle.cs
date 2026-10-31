@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 
 namespace Jellyfin.Plugin.StreamLimit.Gate;
 
@@ -51,15 +52,31 @@ public sealed class KeyedThrottle
 
         // Opportunistic pruning keeps the map from growing forever on servers with many
         // rotating browser device ids.
+        Prune(now);
+        return true;
+    }
+
+    /// <summary>
+    /// Gets the number of keys currently remembered.
+    /// </summary>
+    public int Count => _last.Count;
+
+    /// <summary>
+    /// Drops the keys whose last event is long past (also run by the periodic housekeeping,
+    /// so entries of a burst that was never followed by another event do not stay forever).
+    /// </summary>
+    public void Prune() => Prune(_clock.GetUtcNow());
+
+    private void Prune(DateTimeOffset now)
+    {
         var keepFor = _interval > TimeSpan.FromMinutes(10) ? _interval : TimeSpan.FromMinutes(10);
         foreach (var (staleKey, seenAt) in _last)
         {
             if (now - seenAt > keepFor)
             {
-                _last.TryRemove(staleKey, out _);
+                // Remove only the entry we inspected: a concurrent acquire wins.
+                _last.TryRemove(KeyValuePair.Create(staleKey, seenAt));
             }
         }
-
-        return true;
     }
 }

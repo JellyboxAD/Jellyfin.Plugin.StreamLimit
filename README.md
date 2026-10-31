@@ -33,10 +33,11 @@ Installing from the repository is recommended: you get automatic updates and the
 - 🚧 **Hard block at the HTTP level** *(BETA)*: media requests over the limit get `403` before a single byte is served. A stream that is never served cannot be played, whatever the client (native apps, Infuse, external players, custom apps).
 - 🙅 **Clean refusal at setup** *(BETA)*: `PlaybackInfo` answers "playback not allowed", so clients fail before loading instead of spinning
 - 💬 **Your own message on web clients** *(BETA)*: one popup with your title/text instead of the generic dialog, in every language — with placeholders such as `{{devices}}` (where the user is already watching)
-- 📺 **Live view**: see every counted stream on the settings page and stop it (optionally logging the device out)
+- 📺 **Live view**: see exactly the streams that count (and why), stop one (optionally logging the device out) or reset a user's streams
+- 📱 **Message on native apps**: Android TV, Swiftfin, Streamyfin, AFinity, Findroid… get your message as a notice instead of an endless spinner
 - 🔔 **Webhook notifications**: Discord, Apprise or any JSON endpoint when a stream is blocked
 - 🛑 **Reactive safety net**: stop command → server-side transcode kill → optional device logout
-- 👻 **No ghost lockouts**: a crashed client that stopped reporting playback frees its slot after 3 minutes, and a client that keeps its session alive after being stopped no longer counts
+- 👻 **No ghost lockouts**: streams count by real activity (Jellyfin playback reports, bytes actually sent), not by open connections; a crashed client that stopped reporting playback frees its slot after 3 minutes, and a client that keeps its session alive after being stopped no longer counts
 - 📋 **Activity log**: every blocked stream appears in *Dashboard → Activity* with user, device, client and IP
 - 🧹 **Clean-up**: a deleted user's limit is removed from the configuration
 - 🔁 **Automatic migration** of pre-1.1 configurations
@@ -55,7 +56,7 @@ Defaults are safe: install, set a limit, done.
 **Stream limits**
 - **Per-user limit**: pick a user and set their max simultaneous streams. Empty or `0` removes the entry (the default applies).
 - **Default limit**: applies to every user without an explicit limit. `0` = unlimited.
-- A paused stream still counts as active.
+- A paused stream still counts while its client keeps reporting playback to Jellyfin (most clients do, every few seconds). A media connection left open without sending anything (phone asleep, network lost, app killed) does not.
 - Administrators are not limited while *Exempt administrators* is on (default).
 
 **Enforcement**
@@ -71,10 +72,12 @@ Defaults are safe: install, set a limit, done.
 | Record blocked streams in the activity log | on | Adds a *Dashboard → Activity* entry per block (user, device, client, IP), at most one per user and device every 5 minutes. |
 
 **Active streams** (top of the settings page)
-- Every stream the plugin counts, per user and device: client, item, play method, IP, last activity. Refreshes every 5 seconds while the page is open.
-- *Stopped, not counted* marks a device the plugin just stopped whose client still keeps its session alive; *HTTP only* marks a device seen only through its media requests (external players).
+- Exactly the streams the plugin counts against the limit, per user and device — client, item, play method, IP, last activity, idle time — plus the devices the plugin just stopped. Refreshes every 5 seconds while the page is open.
+- Each stream says why it counts: **playing** (Jellyfin reports playback), **streaming** (a media response sent bytes in the last 90 s), **recent** (a media request in the last 60 s, e.g. HLS between segments). **Stopped** marks a device the plugin stopped whose client still keeps its session alive: shown, not counted.
+- Open connections that send nothing are not counted and not listed (their number is shown as *open responses* on the streams that are). They are cut after 30 minutes without a byte.
 - Exempt administrators only appear when their client reports playback (they bypass the HTTP gate, so they hold no slot).
 - **Stop** sends a stop command (a server-side stop for clients that can't receive it), kills its transcode, cuts the device's media downloads still in progress and frees its slot immediately; **Stop + log out** also logs the device out. Both are recorded in *Dashboard → Activity*. A stop is not a ban: the device can start again if the user is under their limit.
+- **Reset** (per user) is the last-resort fix when a user is counted with streams they don't have: it releases all of the user's slots (cutting their open media responses) and forgets the devices the plugin stopped, so only what Jellyfin really reports counts again.
 
 **Blocked message**
 - **Title / Text**: your wording, shown when a stream is blocked. Placeholders, in both:
@@ -88,7 +91,8 @@ Defaults are safe: install, set a limit, done.
 
   Example: `{{user}}, you are already watching on {{devices}} ({{active}}/{{limit}}).` Placeholders are case-insensitive; unknown ones are left as typed. They apply to the web popup and to the server message.
 - **Show my message on web clients** *(BETA, on)*: replaces the web client's "not allowed" dialog with your popup (browser, Android app, iOS app). **No server restart needed**: turning it on/off or changing the title/text only needs a browser refresh. Works with read-only web folders (Docker, distro packages).
-- **Also push a server message** *(off, advanced)*: sends a Jellyfin `DisplayMessage` command. Only some native apps show it (Android TV, as a toast), and it adds a second popup on web clients.
+- **Show my message on native apps** *(on)*: sends your title/text as a Jellyfin server message (`DisplayMessage`, shown for 10 s) to the blocked device when its app is native (Android TV, Swiftfin, Streamyfin, AFinity, Findroid, Jellyfin Media Player, Kodi…): those apps cannot show the web popup and would otherwise only show an error or an endless spinner. When the jellyfin-android app's native player is blocked, the message goes to the app's web UI instead (the player itself cannot receive it). At most one message per user and device every 30 s. Whether and how a native app displays it is up to the app.
+- **Also send the server message to web clients** *(off, advanced)*: web-based clients (browser, Android and iOS apps) already show your popup; this adds the server message on top, as a second dialog.
 
 **Notifications**
 
@@ -120,8 +124,8 @@ Every client is blocked by the hard block. What the user *sees* depends on the a
 | Client | What the user sees when blocked |
 |---|---|
 | Jellyfin Web (browser) | Your custom popup |
-| Jellyfin Android / iOS apps | Your custom popup (web UI); the native Android player may show an empty player |
-| Jellyfin Android TV | "Playback not allowed" toast; your server message as a toast too if *Also push a server message* is on |
+| Jellyfin Android / iOS apps | Your custom popup (web UI); when the native Android player is blocked, your message waits in the app's web UI |
+| Jellyfin Android TV | "Playback not allowed" toast, then your server message as a toast |
 | Swiftfin | Closes the player on the initial `403` (generic error); ignores server messages |
 | Streamyfin | "Failed to get the stream URL", or an endless loader with the mpv engine |
 | AFinity | An error message |
@@ -137,13 +141,14 @@ Downloaded/offline items play from the device and cannot be blocked by the serve
 - a new device beyond the limit gets **`403`** with the resolved message in its JSON body (`{"Message": "…"}`) and an `X-StreamLimit: 1` header — no media bytes are ever served;
 - `PlaybackInfo` returns `ErrorCode: NotAllowed` at the limit;
 - every block response also carries the resolved title and text in `X-StreamLimit-Title` / `X-StreamLimit-Message` (percent-encoded UTF-8), exposed to cross-origin web clients via `Access-Control-Expose-Headers`;
-- slots free up when the client reports a stop, when its session ends, or after 60 s without traffic; a session that stopped checking in for 3 minutes no longer counts;
+- a device counts only while it shows real activity: Jellyfin reports it playing (check-in within 3 minutes), one of its media responses sent bytes within 90 s, or it made a media request within 60 s. A response that stays open without sending anything (half-open connection after the phone slept or lost its network, a paused progressive transcode, a server-side segment wait the client gave up on) stops counting after 90 s; if it starts sending again it counts again; after 30 minutes without a byte it is cut;
+- slots free up when the client reports a stop (unless a response is still sending), when its session ends, or after 60 s without activity; idle slots of a user about to be blocked are freed after 15 s; a clean-up runs every minute;
 - theme songs and backdrop videos played while browsing never hold a slot;
 - requests that cannot be attributed to a user (API keys, anonymous) are never blocked, unless strict mode is on.
 
 **Web message.** The plugin adds a `<script>` tag to the web client's `index.html` *as it is served* (a small middleware, compatible with a server BaseUrl). Nothing is written to the web folder, so it works with read-only installs and survives web updates; the setting is read on every page load, so toggling it needs no restart. Versions up to 1.1.0.1 wrote the tag into `index.html` on disk: it is removed automatically at startup (and on uninstall). The script detects a block (`X-StreamLimit` header or `PlaybackInfo` error, over both XHR and `fetch`), shows one popup with your title/text above the buffering spinner and hides the client's own error dialog. If anything goes wrong, the page is served unchanged and the client simply shows its built-in dialog — the block itself is never affected.
 
-**Reactive safety net.** When a playback start still goes over the limit, the plugin stops the newest stream: stop command (plus a server-side stop when the client cannot receive commands) → transcode kill → optional server message → optional device logout. It counts one stream per device, and only sessions that reported playback in the last 3 minutes, so a crashed client can't get your new stream killed. A stopped device is then left out of the count for up to 10 minutes — until it reports a stop, its session ends or it is allowed to play again — because some clients keep reporting progress after being stopped (AFinity), never report the stop (Swiftfin on error) or cannot receive the stop command (jellyfin-android's native player).
+**Reactive safety net.** When a playback start still goes over the limit, the plugin stops the newest stream: stop command (plus a server-side stop when the client cannot receive commands) → transcode kill → server message (native apps) → optional device logout. It counts one stream per device, and only sessions that reported playback in the last 3 minutes, so a crashed client can't get your new stream killed. A stopped device is then left out of the count for up to 10 minutes — until it reports a stop, its session ends or it is allowed to play again — because some clients keep reporting progress after being stopped (AFinity), never report the stop (Swiftfin on error) or cannot receive the stop command (jellyfin-android's native player).
 
 ## Troubleshooting
 
@@ -174,9 +179,15 @@ GET  /StreamLimit/ActiveStreams
            "streams": [ { "deviceId", "deviceName", "client", "itemName",
                           "playMethod": "DirectPlay|DirectStream|Transcode|unknown",
                           "remoteEndPoint", "sessionId", "lastActivity": "<ISO UTC>",
-                          "source": "session|slot|both", "enforced": <bool> } ] } ]
+                          "source": "session|slot|both", "enforced": <bool>,
+                          "counted": <bool>, "reason": "playing|streaming|recent|stopped",
+                          "idleSeconds": <n>, "openResponses": <n> } ] } ]
+     → only what is counted, plus the devices the plugin stopped ("reason": "stopped", "counted": false)
 POST /StreamLimit/KickStream?userId=<id>&deviceId=<device-id>&logout=false
-     → { "stopped": <sessions stopped>, "aborted": <media responses cut>, "released": <slot freed>, "loggedOut": <bool> }
+     → { "stopped": <sessions stopped>, "aborted": <live media responses cut>, "stale": <ended registrations cleared>,
+         "released": <slot freed>, "loggedOut": <bool> }
+POST /StreamLimit/ResetUserStreams?userId=<id>
+     → { "released": <slots released>, "aborted": <live media responses cut> }; also clears the user's stopped devices
 POST /StreamLimit/TestWebhook[?url=<url>]
      → { "ok": <2xx>, "status": <http status|null>, "error": <text|null> }; 400 without a valid http(s) URL
 ```

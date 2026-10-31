@@ -37,6 +37,7 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
     private readonly StreamEnforcer _enforcer;
     private readonly BlockActivityLogger _activityLogger;
     private readonly WebhookNotifier _webhookNotifier;
+    private readonly BlockMessenger _messenger;
     private readonly ILogger<PlaybackStartLimiter> _logger;
 
     /// <summary>
@@ -50,6 +51,7 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
     /// <param name="enforcer">The shared stop actions.</param>
     /// <param name="activityLogger">The activity log writer for blocked streams.</param>
     /// <param name="webhookNotifier">The webhook notifier.</param>
+    /// <param name="messenger">The blocked-message sender.</param>
     /// <param name="logger">The logger.</param>
     public PlaybackStartLimiter(
         ISessionManager sessionManager,
@@ -60,6 +62,7 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
         StreamEnforcer enforcer,
         BlockActivityLogger activityLogger,
         WebhookNotifier webhookNotifier,
+        BlockMessenger messenger,
         ILogger<PlaybackStartLimiter> logger)
     {
         _sessionManager = sessionManager;
@@ -70,6 +73,7 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
         _enforcer = enforcer;
         _activityLogger = activityLogger;
         _webhookNotifier = webhookNotifier;
+        _messenger = messenger;
         _logger = logger;
     }
 
@@ -203,13 +207,14 @@ public sealed class PlaybackStartLimiter : IEventConsumer<PlaybackStartEventArgs
         // otherwise some clients drop the dialog during the screen transition.
         await Task.Delay(500).ConfigureAwait(false);
 
-        // Off by default: the stop command already makes the client surface its own
-        // state; a custom popup is redundant. See PluginConfiguration.ShowLimitPopup.
+        // Native apps get the server message (they cannot show the injected popup), web
+        // clients only with ShowLimitPopup; see MessageTargets.
         var configuration = Plugin.Instance?.Configuration;
-        if (configuration?.ShowLimitPopup == true)
+        if (configuration is not null)
         {
-            await _enforcer.SendMessageAsync(
-                session,
+            await _messenger.NotifyAsync(
+                session.UserId,
+                blocked.DeviceId,
                 MessageTemplate.Render(configuration.ResolvedMessageTitle, blocked.MessageValues),
                 MessageTemplate.Render(configuration.ResolvedMessageText, blocked.MessageValues),
                 context).ConfigureAwait(false);

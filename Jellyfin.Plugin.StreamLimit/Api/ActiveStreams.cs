@@ -74,9 +74,29 @@ public sealed class ActiveStream
     [JsonPropertyName("source")]
     public string Source { get; set; } = "session";
 
-    /// <summary>Gets or sets a value indicating whether the limiter stopped this device recently (not counted).</summary>
+    /// <summary>Gets or sets a value indicating whether the limiter stopped this device recently (its session no longer counts).</summary>
     [JsonPropertyName("enforced")]
     public bool Enforced { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether this stream counts against the user's limit.</summary>
+    [JsonPropertyName("counted")]
+    public bool Counted { get; set; }
+
+    /// <summary>
+    /// Gets or sets why the stream is listed: <c>playing</c> (Jellyfin reports playback),
+    /// <c>streaming</c> (a media response wrote bytes recently), <c>recent</c> (a media request
+    /// within the slot TTL) or <c>stopped</c> (stopped by the plugin, not counted).
+    /// </summary>
+    [JsonPropertyName("reason")]
+    public string Reason { get; set; } = ActiveStreamsBuilder.ReasonPlaying;
+
+    /// <summary>Gets or sets the seconds since the last activity (check-in, request or bytes written).</summary>
+    [JsonPropertyName("idleSeconds")]
+    public int IdleSeconds { get; set; }
+
+    /// <summary>Gets or sets the number of open media responses of the device, idle ones included.</summary>
+    [JsonPropertyName("openResponses")]
+    public int OpenResponses { get; set; }
 }
 
 /// <summary>
@@ -85,8 +105,22 @@ public sealed class ActiveStream
 /// </summary>
 public static class ActiveStreamsBuilder
 {
+    /// <summary>Jellyfin reports playback (fresh check-in).</summary>
+    public const string ReasonPlaying = "playing";
+
+    /// <summary>A media response wrote bytes recently.</summary>
+    public const string ReasonStreaming = "streaming";
+
+    /// <summary>A media request within the slot TTL.</summary>
+    public const string ReasonRecent = "recent";
+
+    /// <summary>Stopped by the plugin; not counted.</summary>
+    public const string ReasonStopped = "stopped";
+
     /// <summary>
-    /// Builds the live view: every user with at least one playing session or gate slot.
+    /// Builds the live view: exactly what is counted against each user's limit, plus the
+    /// devices the plugin stopped. Gate slots that are no longer held (only idle open
+    /// responses left) are not listed; users with nothing counted and nothing stopped neither.
     /// </summary>
     /// <param name="sessions">All server sessions.</param>
     /// <param name="slots">The gate's slots.</param>
@@ -136,6 +170,32 @@ public static class ActiveStreamsBuilder
             {
                 var session = playing.FirstOrDefault(s => string.Equals(PlayingSessions.StreamKey(s), key, StringComparison.OrdinalIgnoreCase));
                 var slot = userSlots.FirstOrDefault(s => string.Equals(s.DeviceId, key, StringComparison.OrdinalIgnoreCase));
+                var enforced = isEnforced(userId, key);
+
+                // Same rules as the gate: an enforced device's session does not count, its
+                // traffic still does (it really streams).
+                string reason;
+                if (session is not null && !enforced)
+                {
+                    reason = ReasonPlaying;
+                }
+                else if (slot is not null && slot.LiveRequests > 0)
+                {
+                    reason = ReasonStreaming;
+                }
+                else if (slot is not null && slot.Recent)
+                {
+                    reason = ReasonRecent;
+                }
+                else if (enforced)
+                {
+                    reason = ReasonStopped;
+                }
+                else
+                {
+                    // Only idle open responses left: not counted, not listed.
+                    continue;
+                }
 
                 // A slot-only device (external player, HTTP traffic only) may still have an
                 // idle session that knows its name.
@@ -147,6 +207,7 @@ public static class ActiveStreamsBuilder
                     lastActivity = slot.LastSeenUtc.UtcDateTime;
                 }
 
+                var idle = lastActivity is null ? 0 : (utcNow - lastActivity.Value).TotalSeconds;
                 user.Streams.Add(new ActiveStream
                 {
                     DeviceId = key,
@@ -158,8 +219,17 @@ public static class ActiveStreamsBuilder
                     SessionId = anySession?.Id,
                     LastActivity = lastActivity is null ? null : DateTime.SpecifyKind(lastActivity.Value, DateTimeKind.Utc),
                     Source = session is not null && slot is not null ? "both" : session is not null ? "session" : "slot",
-                    Enforced = isEnforced(userId, key),
+                    Enforced = enforced,
+                    Counted = reason != ReasonStopped,
+                    Reason = reason,
+                    IdleSeconds = idle <= 0 ? 0 : (int)Math.Min(idle, int.MaxValue),
+                    OpenResponses = slot?.InFlight ?? 0,
                 });
+            }
+
+            if (user.Streams.Count == 0)
+            {
+                continue;
             }
 
             user.Streams.Sort((a, b) => string.Compare(a.DeviceName ?? a.DeviceId, b.DeviceName ?? b.DeviceId, StringComparison.OrdinalIgnoreCase));

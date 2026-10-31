@@ -25,9 +25,10 @@ public class SlotAbortTests
         tracker.BeginRequest(User, "tv", () => aborted++);
         tracker.BeginRequest(User, "TV", () => aborted++);
 
-        var (count, released) = tracker.AbortDevice(User, "tv");
+        var (count, stale, released) = tracker.AbortDevice(User, "tv");
 
         Assert.Equal(2, count);
+        Assert.Equal(0, stale);
         Assert.True(released);
         Assert.Equal(2, aborted);
         Assert.Empty(tracker.GetSnapshot());
@@ -56,7 +57,7 @@ public class SlotAbortTests
     {
         var tracker = CreateTracker();
 
-        Assert.Equal((0, false), tracker.AbortDevice(User, "nothing"));
+        Assert.Equal((0, 0, false), tracker.AbortDevice(User, "nothing"));
     }
 
     [Fact]
@@ -67,7 +68,7 @@ public class SlotAbortTests
         tracker.BeginRequest(User, "tv", () => throw new ObjectDisposedException("connection"));
         tracker.BeginRequest(User, "tv", () => secondCalled = true);
 
-        var (count, released) = tracker.AbortDevice(User, "tv");
+        var (count, _, released) = tracker.AbortDevice(User, "tv");
 
         Assert.True(released);
         Assert.Equal(1, count);
@@ -89,7 +90,7 @@ public class SlotAbortTests
         Assert.Equal(0, tracker.GetSnapshot().Single().InFlight);
 
         // Nothing left to abort once both responses ended.
-        var (count, released) = tracker.AbortDevice(User, "tv");
+        var (count, _, released) = tracker.AbortDevice(User, "tv");
         Assert.Equal(0, count);
         Assert.True(released);
         Assert.False(called);
@@ -124,7 +125,7 @@ public class SlotAbortTests
     }
 
     [Fact]
-    public void ReleaseDevice_StillKeepsInFlightSlots()
+    public void ReleaseDevice_StillKeepsLiveSlots()
     {
         // Automatic stop reports keep their behaviour: only the admin kick aborts.
         var tracker = CreateTracker();

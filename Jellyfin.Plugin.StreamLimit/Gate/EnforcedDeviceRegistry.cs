@@ -60,13 +60,37 @@ public sealed class EnforcedDeviceRegistry
         _enforced[Key(userId, streamKey)] = now;
 
         // Opportunistic pruning keeps the map bounded on servers with rotating device ids.
-        foreach (var (key, enforcedAt) in _enforced)
+        Prune(now);
+    }
+
+    /// <summary>
+    /// Gets the number of entries currently remembered (expired ones included until pruned).
+    /// </summary>
+    public int Count => _enforced.Count;
+
+    /// <summary>
+    /// Drops the expired entries (also run by the periodic housekeeping).
+    /// </summary>
+    public void Prune() => Prune(_clock.GetUtcNow());
+
+    /// <summary>
+    /// Clears every entry of a user (admin reset).
+    /// </summary>
+    /// <param name="userId">The user.</param>
+    /// <returns>The number of entries cleared.</returns>
+    public int ClearUser(Guid userId)
+    {
+        var prefix = StreamLimitStore.NormalizeUserKey(userId) + "|";
+        var cleared = 0;
+        foreach (var key in _enforced.Keys)
         {
-            if (now - enforcedAt > Lifetime)
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && _enforced.TryRemove(key, out _))
             {
-                _enforced.TryRemove(key, out _);
+                cleared++;
             }
         }
+
+        return cleared;
     }
 
     /// <summary>
@@ -131,6 +155,18 @@ public sealed class EnforcedDeviceRegistry
         {
             // Remove only the entry we inspected: a fresh Record racing this call wins.
             _enforced.TryRemove(KeyValuePair.Create(key, enforcedAt));
+        }
+    }
+
+    private void Prune(DateTimeOffset now)
+    {
+        foreach (var (key, enforcedAt) in _enforced)
+        {
+            if (now - enforcedAt > Lifetime)
+            {
+                // Remove only the entry we inspected: a fresh Record racing this call wins.
+                _enforced.TryRemove(KeyValuePair.Create(key, enforcedAt));
+            }
         }
     }
 

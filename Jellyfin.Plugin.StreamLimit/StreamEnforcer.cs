@@ -142,9 +142,10 @@ public sealed class StreamEnforcer
     /// <param name="session">The session.</param>
     /// <param name="title">The message title.</param>
     /// <param name="text">The message text.</param>
+    /// <param name="timeoutMs">The display timeout; null shows a dialog the user dismisses (web clients).</param>
     /// <param name="context">Log prefix identifying the caller.</param>
     /// <returns>A task.</returns>
-    public async Task SendMessageAsync(SessionInfo session, string title, string text, string context)
+    public async Task SendMessageAsync(SessionInfo session, string title, string text, long? timeoutMs, string context)
     {
         try
         {
@@ -155,10 +156,11 @@ public sealed class StreamEnforcer
                 {
                     Header = title,
                     Text = text,
+                    TimeoutMs = timeoutMs,
                 },
                 CancellationToken.None).ConfigureAwait(false);
 
-            _logger.LogInformation("[{Context}] Limit message sent", context);
+            _logger.LogInformation("[{Context}] Limit message sent to session {SessionId} ({Client})", context, session.Id, session.Client);
         }
         catch (Exception ex)
         {

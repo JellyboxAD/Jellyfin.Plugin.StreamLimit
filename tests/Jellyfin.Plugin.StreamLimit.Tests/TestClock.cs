@@ -12,4 +12,9 @@ internal sealed class TestClock : TimeProvider
     public void Advance(TimeSpan by) => _now += by;
 
     public override DateTimeOffset GetUtcNow() => _now;
+
+    // Timestamps follow the manual clock too (ActivityStream throttling).
+    public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+    public override long GetTimestamp() => _now.UtcTicks;
 }

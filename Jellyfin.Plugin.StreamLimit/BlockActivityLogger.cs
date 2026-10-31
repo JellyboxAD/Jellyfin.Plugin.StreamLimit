@@ -87,6 +87,11 @@ public sealed class BlockActivityLogger
     }
 
     /// <summary>
+    /// Drops expired throttle entries (periodic housekeeping).
+    /// </summary>
+    public void PruneThrottle() => _throttle.Prune();
+
+    /// <summary>
     /// Records a blocked stream in the activity log, unless disabled or throttled.
     /// </summary>
     /// <param name="blocked">The blocked stream.</param>
