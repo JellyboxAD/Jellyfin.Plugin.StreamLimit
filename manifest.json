@@ -9,6 +9,22 @@
         "imageUrl": "https://raw.githubusercontent.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/refs/heads/main/Readme-data/LOGO.png",
         "versions": [
             {
+                "version": "1.1.1.3",
+                "changelog": "Jellyfin 12 build of v1.1.0.3 (same changes — see the 1.1.0.3 entry). Servers pick the right build automatically: 10.11 installs 1.1.0.3, Jellyfin 12 installs 1.1.1.3.",
+                "targetAbi": "12.0.0.0",
+                "sourceUrl": "https://github.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/releases/download/v1.1.0.3/StreamLimit-v1.1.0.3-jellyfin12.zip",
+                "timestamp": "2026-10-31T17:48:05Z",
+                "checksum": "0553C9185A0A3F67BEDB78790279E1A8"
+            },
+            {
+                "version": "1.1.0.3",
+                "changelog": "- Fixed \"ghost\" streams: users shown with (and blocked by) streams they no longer had, even while not connected. Streams now count by real activity — Jellyfin playback reports and bytes actually sent — instead of open connections: a media connection left open without sending anything (phone asleep or offline, app killed, a server-side segment wait the client gave up on) stops counting after 90 s and is cut after 30 minutes; ended or client-aborted requests never count\n- Fixed a stop report or session end not freeing the slot of a device that still had idle open connections\n- Fixed playback negotiation (PlaybackInfo) refusing a stream the media request itself would have allowed (abandoned slots of a closed tab)\n- Slots, stopped devices, play-session ids and throttles are now cleaned up every minute, also for users who never come back\n- NEW: your blocked message is sent to native apps by default (Android TV, Swiftfin, Streamyfin, AFinity, Findroid…), as a 10 s notice, instead of an endless spinner (\"Show my message on native apps\", on); when the jellyfin-android native player is blocked, the message goes to the app's web UI. \"Also push a server message\" now only adds it on web clients\n- NEW: \"Reset\" button per user in the live view: releases all of the user's slots and stopped devices (last-resort fix)\n- Clearer live view: only what is counted (plus devices the plugin stopped), with the reason (playing, streaming, recent, stopped), idle time and open connections\n- Admin stop now reports live responses cut separately from stale registrations cleared\n- Redesigned settings page",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/releases/download/v1.1.0.3/StreamLimit-v1.1.0.3.zip",
+                "timestamp": "2026-10-31T17:48:05Z",
+                "checksum": "EEDFD3D977015FC5F8E81743824B7A30"
+            },
+            {
                 "version": "1.1.1.2",
                 "changelog": "Jellyfin 12 build of v1.1.0.2 (same changes — see the 1.1.0.2 entry). Servers pick the right build automatically: 10.11 installs 1.1.0.2, Jellyfin 12 installs 1.1.1.2.",
                 "targetAbi": "12.0.0.0",
