@@ -9,6 +9,22 @@
         "imageUrl": "https://raw.githubusercontent.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/refs/heads/main/Readme-data/LOGO.png",
         "versions": [
             {
+                "version": "1.1.1.4",
+                "changelog": "Jellyfin 12 build of v1.1.0.4 (same changes — see the 1.1.0.4 entry). Servers pick the right build automatically: 10.11 installs 1.1.0.4, Jellyfin 12 installs 1.1.1.4.",
+                "targetAbi": "12.0.0.0",
+                "sourceUrl": "https://github.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/releases/download/v1.1.0.4/StreamLimit-v1.1.0.4-jellyfin12.zip",
+                "timestamp": "2026-11-24T01:53:51Z",
+                "checksum": "9B78F1767B8F2748E1996CB846309BAA"
+            },
+            {
+                "version": "1.1.0.4",
+                "changelog": "- NEW: \"Count each playback, not each device\" (Blocking, beta, off by default): browser tabs share one device id and one Jellyfin session, so they counted as one stream; on, each playback counts (PlaySessionId), also against a copied device id. A playback is refused only once it really overlaps another one, so a quality switch or the next episode is never refused\n- NEW: \"Video transcodes at once, per user\" (Blocking, 0 = unlimited): the newest video transcode over the limit is stopped (ffmpeg job killed, requests refused); direct play, remux and audio are not counted; works without the hard block\n- NEW: the live view lists several playbacks of one device (browser tabs) one by one, with title, start time, transcode and how many streams they count for\n- Fixed a blocked browser tab playing on what it had already downloaded: the web popup now pauses the video and closes the player, and answers the player's automatic retries locally (no server transcode started for nothing)\n- A refused playback is checked again after 30 s, so a client that keeps retrying recovers once the user frees a stream\n- README rewritten tab by tab, with new screenshots",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/JellyboxAD/Jellyfin.Plugin.StreamLimit/releases/download/v1.1.0.4/StreamLimit-v1.1.0.4.zip",
+                "timestamp": "2026-11-24T01:53:51Z",
+                "checksum": "4E44679325D01EDBA1018FC98D0596D2"
+            },
+            {
                 "version": "1.1.1.3",
                 "changelog": "Jellyfin 12 build of v1.1.0.3 (same changes — see the 1.1.0.3 entry). Servers pick the right build automatically: 10.11 installs 1.1.0.3, Jellyfin 12 installs 1.1.1.3.",
                 "targetAbi": "12.0.0.0",
