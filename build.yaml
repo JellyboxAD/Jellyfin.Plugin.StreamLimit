@@ -12,6 +12,14 @@ artifacts:
   - "Jellyfin.Plugin.StreamLimit.dll"
 changelog: |-
 
+  ### [v1.1.0.4]
+  - NEW: "Count each playback, not each device" (Blocking, beta, off by default): browser tabs share one device id and one Jellyfin session, so they counted as one stream; on, each playback counts (PlaySessionId), also against a copied device id. A playback is refused only once it really overlaps another one, so a quality switch or the next episode is never refused
+  - NEW: "Video transcodes at once, per user" (Blocking, 0 = unlimited): the newest video transcode over the limit is stopped (ffmpeg job killed, requests refused); direct play, remux and audio are not counted; works without the hard block
+  - NEW: the live view lists several playbacks of one device (browser tabs) one by one, with title, start time, transcode and how many streams they count for
+  - Fixed a blocked browser tab playing on what it had already downloaded: the web popup now pauses the video and closes the player, and answers the player's automatic retries locally (no server transcode started for nothing)
+  - A refused playback is checked again after 30 s, so a client that keeps retrying recovers once the user frees a stream
+  - README rewritten tab by tab, with new screenshots
+
   ### [v1.1.0.3]
   - Fixed "ghost" streams: users shown with (and blocked by) streams they no longer had, even while not connected. Streams now count by real activity — Jellyfin playback reports and bytes actually sent — instead of open connections: a media connection left open without sending anything (phone asleep or offline, app killed, a server-side segment wait the client gave up on) stops counting after 90 s and is cut after 30 minutes; ended or client-aborted requests never count
   - Fixed a stop report or session end not freeing the slot of a device that still had idle open connections

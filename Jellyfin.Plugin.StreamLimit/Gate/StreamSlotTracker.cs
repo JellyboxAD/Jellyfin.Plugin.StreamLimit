@@ -184,6 +184,23 @@ public sealed class StreamSlotTracker
     }
 
     /// <summary>
+    /// Creates the registration of a media response that holds no slot (the device limit is
+    /// off for this user, only the per-playback rules watch it). End it with
+    /// <see cref="EndDetachedRequest"/>.
+    /// </summary>
+    /// <param name="abort">Aborts the response.</param>
+    /// <param name="requestAborted">The request's <c>RequestAborted</c> token.</param>
+    /// <returns>The registration.</returns>
+    public MediaRequest CreateDetachedRequest(Action? abort = null, CancellationToken requestAborted = default)
+        => new(abort, requestAborted, _clock.GetUtcNow());
+
+    /// <summary>
+    /// Ends a registration made by <see cref="CreateDetachedRequest"/>. Idempotent.
+    /// </summary>
+    /// <param name="registration">The registration.</param>
+    public static void EndDetachedRequest(MediaRequest registration) => registration.MarkCompleted();
+
+    /// <summary>
     /// Records that a media response just wrote bytes. Lock-free; callers throttle it.
     /// </summary>
     /// <param name="registration">The registration returned by <see cref="BeginRequest"/>.</param>

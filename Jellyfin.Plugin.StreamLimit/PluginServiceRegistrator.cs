@@ -24,6 +24,8 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     {
         serviceCollection.AddSingleton<StreamLimitManager>();
         serviceCollection.AddSingleton<StreamSlotTracker>();
+        serviceCollection.AddSingleton<PlaybackTracker>();
+        serviceCollection.AddSingleton<PlaybackLimitEnforcer>();
         serviceCollection.AddSingleton<EnforcedDeviceRegistry>();
         serviceCollection.AddSingleton<PlaySessionRegistry>();
         serviceCollection.AddSingleton<StreamEnforcer>();

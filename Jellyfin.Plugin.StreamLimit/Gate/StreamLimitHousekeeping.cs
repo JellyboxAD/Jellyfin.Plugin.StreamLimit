@@ -25,6 +25,8 @@ public sealed class StreamLimitHousekeeping : IHostedService, IDisposable
     private readonly BlockMessenger _messenger;
     private readonly BlockActivityLogger _activityLogger;
     private readonly WebhookNotifier _webhookNotifier;
+    private readonly PlaybackTracker _playbacks;
+    private readonly PlaybackLimitEnforcer _playbackEnforcer;
     private readonly ILogger<StreamLimitHousekeeping> _logger;
     private Timer? _timer;
     private int _running;
@@ -38,6 +40,8 @@ public sealed class StreamLimitHousekeeping : IHostedService, IDisposable
     /// <param name="messenger">The blocked-message sender (throttle).</param>
     /// <param name="activityLogger">The activity log writer (throttle).</param>
     /// <param name="webhookNotifier">The webhook notifier (throttle).</param>
+    /// <param name="playbacks">The per-playback tracker.</param>
+    /// <param name="playbackEnforcer">The per-playback rules, re-checked for users with several live playbacks.</param>
     /// <param name="logger">The logger.</param>
     public StreamLimitHousekeeping(
         StreamSlotTracker tracker,
@@ -46,6 +50,8 @@ public sealed class StreamLimitHousekeeping : IHostedService, IDisposable
         BlockMessenger messenger,
         BlockActivityLogger activityLogger,
         WebhookNotifier webhookNotifier,
+        PlaybackTracker playbacks,
+        PlaybackLimitEnforcer playbackEnforcer,
         ILogger<StreamLimitHousekeeping> logger)
     {
         _tracker = tracker;
@@ -54,6 +60,8 @@ public sealed class StreamLimitHousekeeping : IHostedService, IDisposable
         _messenger = messenger;
         _activityLogger = activityLogger;
         _webhookNotifier = webhookNotifier;
+        _playbacks = playbacks;
+        _playbackEnforcer = playbackEnforcer;
         _logger = logger;
     }
 
@@ -91,6 +99,13 @@ public sealed class StreamLimitHousekeeping : IHostedService, IDisposable
             if (aborted > 0)
             {
                 _logger.LogInformation("Stream gate aborted {Count} media response(s) idle for more than {Minutes} minutes", aborted, StreamSlotTracker.IdleRequestAbortAfter.TotalMinutes);
+            }
+
+            // Users with several live playbacks: a direct-play tab past the overlap grace is
+            // caught here even if its scheduled check was missed.
+            foreach (var userId in _playbacks.Sweep())
+            {
+                _playbackEnforcer.Check(userId);
             }
 
             _enforcedDevices.Prune();

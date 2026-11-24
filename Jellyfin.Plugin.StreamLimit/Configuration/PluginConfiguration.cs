@@ -40,8 +40,30 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
         WebhookUrl = string.Empty;
         WebhookOnBlock = true;
         WebhookOnAdminKick = false;
+        CountPlaybacks = false;
+        MaxTranscodesPerUser = 0;
         ConfigVersion = 0;
     }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the stream limit counts each playback instead of
+    /// each device. Off by default (one device = one stream). On, several playbacks from one
+    /// device (browser tabs, which share one device id, or clients sending a copied device id)
+    /// each count, through their PlaySessionId. A playback that only overlaps briefly (a quality
+    /// switch, the next episode) is never refused. Needs <see cref="EnableHardBlock"/>.
+    /// </summary>
+    [XmlElement(ElementName = "CountPlaybacks")]
+    public bool CountPlaybacks { get; set; }
+
+    /// <summary>
+    /// Gets or sets the maximum number of simultaneous video transcodes per user, whatever their
+    /// stream limit and devices. 0 or less means unlimited. Remuxes (video copied) and audio are
+    /// not counted. Over the limit, the newest transcode is stopped (its ffmpeg job killed and its
+    /// requests refused), so one account cannot saturate the server's encoder. Works without
+    /// <see cref="EnableHardBlock"/>; administrators are exempt with <see cref="ExemptAdministrators"/>.
+    /// </summary>
+    [XmlElement(ElementName = "MaxTranscodesPerUser")]
+    public int MaxTranscodesPerUser { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the plugin injects a small script into

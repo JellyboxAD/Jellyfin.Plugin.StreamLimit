@@ -76,6 +76,40 @@ public static class StreamGateEndpoints
         [("MediaInfo", "OpenLiveStream")] = GateKind.StartupCheck,
     };
 
+    // Video byte routes that can run ffmpeg: HLS always does (transcode or remux), the
+    // progressive video stream unless it is a static (direct-play) request.
+    private static readonly HashSet<string> VideoFfmpegActions = new(StringComparer.Ordinal)
+    {
+        "GetLiveHlsStream",
+        "GetMasterHlsVideoPlaylist",
+        "GetVariantHlsVideoPlaylist",
+        "GetHlsVideoSegment",
+        "GetHlsVideoSegmentLegacy",
+        "GetHlsPlaylistLegacy",
+    };
+
+    /// <summary>
+    /// Whether a media request can be fed by a video ffmpeg job, so the transcode limit
+    /// watches it. Audio, direct-play and raw-file routes never transcode video.
+    /// </summary>
+    /// <param name="actionName">The action method name.</param>
+    /// <param name="staticParameter">The request's <c>static</c> query value.</param>
+    /// <returns>True when the request may be a video transcode.</returns>
+    public static bool CanTranscodeVideo(string? actionName, string? staticParameter)
+    {
+        if (string.IsNullOrEmpty(actionName))
+        {
+            return false;
+        }
+
+        if (actionName is "GetVideoStream" or "GetVideoStreamByContainer")
+        {
+            return !string.Equals(staticParameter, "true", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return VideoFfmpegActions.Contains(actionName);
+    }
+
     /// <summary>
     /// Classifies a controller action.
     /// </summary>

@@ -97,6 +97,64 @@ public sealed class ActiveStream
     /// <summary>Gets or sets the number of open media responses of the device, idle ones included.</summary>
     [JsonPropertyName("openResponses")]
     public int OpenResponses { get; set; }
+
+    /// <summary>
+    /// Gets the playbacks seen on this device by the HTTP gate (several when browser tabs, which
+    /// share one device, play at the same time), oldest first. Empty when the gate does not
+    /// watch this user (hard block off, exempt administrator).
+    /// </summary>
+    [JsonPropertyName("playbacks")]
+    public List<ActivePlayback> Playbacks { get; } = new();
+
+    /// <summary>
+    /// Gets or sets how many streams this device counts against the limit: 0 when not counted,
+    /// 1 per device, or one per live playback when <c>CountPlaybacks</c> is on.
+    /// </summary>
+    [JsonPropertyName("countedStreams")]
+    public int CountedStreams { get; set; }
+}
+
+/// <summary>
+/// One playback of a device, as shown in the admin live view.
+/// </summary>
+public sealed class ActivePlayback
+{
+    /// <summary>
+    /// Gets or sets the PlaySessionId, or null for a playback keyed by item.
+    /// </summary>
+    [JsonPropertyName("playSessionId")]
+    public string? PlaySessionId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the name of the item played, when known.
+    /// </summary>
+    [JsonPropertyName("itemName")]
+    public string? ItemName { get; set; }
+
+    /// <summary>
+    /// Gets or sets when the playback started (its first media request).
+    /// </summary>
+    [JsonPropertyName("startedAt")]
+    public DateTime StartedAt { get; set; }
+
+    /// <summary>
+    /// Gets or sets the last media request or bytes sent.
+    /// </summary>
+    [JsonPropertyName("lastActivity")]
+    public DateTime LastActivity { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the playback is a video transcode right now.
+    /// </summary>
+    [JsonPropertyName("transcoding")]
+    public bool Transcoding { get; set; }
+
+    /// <summary>
+    /// Gets or sets why the playback was refused (<c>playback-limit</c>, <c>transcode-limit</c>),
+    /// or null when it is allowed.
+    /// </summary>
+    [JsonPropertyName("refused")]
+    public string? Refused { get; set; }
 }
 
 /// <summary>
@@ -129,6 +187,10 @@ public static class ActiveStreamsBuilder
     /// <param name="isExempt">Whether a user is exempt.</param>
     /// <param name="getUserName">User name lookup (used when no session carries one).</param>
     /// <param name="isEnforced">Whether a user's device is in the enforced registry.</param>
+    /// <param name="playbacks">The gate's playbacks (several per device for browser tabs); null when unknown.</param>
+    /// <param name="getItemName">Item name lookup for the playbacks.</param>
+    /// <param name="isTranscoding">Whether a playback is a video transcode right now.</param>
+    /// <param name="countPlaybacks">Whether each playback counts against the limit (CountPlaybacks), not each device.</param>
     /// <returns>The users, by name.</returns>
     public static IReadOnlyList<ActiveUserStreams> Build(
         IReadOnlyCollection<SessionInfo> sessions,
@@ -137,8 +199,13 @@ public static class ActiveStreamsBuilder
         Func<Guid, int> getLimit,
         Func<Guid, bool> isExempt,
         Func<Guid, string?> getUserName,
-        Func<Guid, string, bool> isEnforced)
+        Func<Guid, string, bool> isEnforced,
+        IReadOnlyCollection<PlaybackSnapshot>? playbacks = null,
+        Func<string, string?>? getItemName = null,
+        Func<PlaybackSnapshot, bool>? isTranscoding = null,
+        bool countPlaybacks = false)
     {
+        playbacks ??= Array.Empty<PlaybackSnapshot>();
         var userIds = sessions.Where(s => !s.UserId.Equals(Guid.Empty)).Select(s => s.UserId)
             .Concat(slots.Select(s => s.UserId))
             .Distinct();
@@ -208,7 +275,7 @@ public static class ActiveStreamsBuilder
                 }
 
                 var idle = lastActivity is null ? 0 : (utcNow - lastActivity.Value).TotalSeconds;
-                user.Streams.Add(new ActiveStream
+                var stream = new ActiveStream
                 {
                     DeviceId = key,
                     DeviceName = anySession?.DeviceName,
@@ -224,7 +291,32 @@ public static class ActiveStreamsBuilder
                     Reason = reason,
                     IdleSeconds = idle <= 0 ? 0 : (int)Math.Min(idle, int.MaxValue),
                     OpenResponses = slot?.InFlight ?? 0,
-                });
+                };
+
+                // The playbacks of this device (browser tabs share one device and one session):
+                // listed so the admin sees two tabs as two simultaneous playbacks.
+                foreach (var playback in playbacks.Where(p => p.UserId.Equals(userId)
+                                                             && string.Equals(p.DeviceId, key, StringComparison.OrdinalIgnoreCase)))
+                {
+                    stream.Playbacks.Add(new ActivePlayback
+                    {
+                        PlaySessionId = playback.PlaySessionId,
+                        ItemName = string.IsNullOrEmpty(playback.ItemId) ? null : getItemName?.Invoke(playback.ItemId),
+                        StartedAt = playback.StartedUtc.UtcDateTime,
+                        LastActivity = playback.LastActivityUtc.UtcDateTime,
+                        Transcoding = playback.DeniedReason is null && isTranscoding?.Invoke(playback) == true,
+                        Refused = playback.DeniedReason switch
+                        {
+                            PlaybackDenialReason.PlaybackLimit => "playback-limit",
+                            PlaybackDenialReason.TranscodeLimit => "transcode-limit",
+                            _ => null,
+                        },
+                    });
+                }
+
+                var allowedPlaybacks = stream.Playbacks.Count(p => p.Refused is null);
+                stream.CountedStreams = !stream.Counted ? 0 : countPlaybacks ? Math.Max(1, allowedPlaybacks) : 1;
+                user.Streams.Add(stream);
             }
 
             if (user.Streams.Count == 0)

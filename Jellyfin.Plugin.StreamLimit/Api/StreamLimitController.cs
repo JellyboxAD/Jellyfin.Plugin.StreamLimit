@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Jellyfin.Plugin.StreamLimit.Gate;
 using Jellyfin.Plugin.StreamLimit.Notifications;
 using MediaBrowser.Common.Api;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
 using Microsoft.AspNetCore.Authorization;
@@ -31,6 +32,9 @@ public class StreamLimitController : ControllerBase
     private readonly StreamSlotTracker _tracker;
     private readonly EnforcedDeviceRegistry _enforcedDevices;
     private readonly PlaySessionRegistry _playSessions;
+    private readonly PlaybackTracker _playbacks;
+    private readonly PlaybackLimitEnforcer _playbackEnforcer;
+    private readonly ILibraryManager _libraryManager;
     private readonly StreamEnforcer _enforcer;
     private readonly BlockActivityLogger _activityLogger;
     private readonly WebhookNotifier _webhookNotifier;
@@ -45,6 +49,9 @@ public class StreamLimitController : ControllerBase
     /// <param name="tracker">The gate's slot tracker.</param>
     /// <param name="enforcedDevices">The registry of devices the limit was enforced on.</param>
     /// <param name="playSessions">The registry of the sessions' PlaySessionIds.</param>
+    /// <param name="playbacks">The per-playback tracker.</param>
+    /// <param name="playbackEnforcer">The per-playback rules (transcode lookup for the live view).</param>
+    /// <param name="libraryManager">Instance of the <see cref="ILibraryManager"/> interface.</param>
     /// <param name="enforcer">The shared stop actions.</param>
     /// <param name="activityLogger">The activity log writer.</param>
     /// <param name="webhookNotifier">The webhook notifier.</param>
@@ -56,6 +63,9 @@ public class StreamLimitController : ControllerBase
         StreamSlotTracker tracker,
         EnforcedDeviceRegistry enforcedDevices,
         PlaySessionRegistry playSessions,
+        PlaybackTracker playbacks,
+        PlaybackLimitEnforcer playbackEnforcer,
+        ILibraryManager libraryManager,
         StreamEnforcer enforcer,
         BlockActivityLogger activityLogger,
         WebhookNotifier webhookNotifier)
@@ -67,6 +77,9 @@ public class StreamLimitController : ControllerBase
         _tracker = tracker;
         _enforcedDevices = enforcedDevices;
         _playSessions = playSessions;
+        _playbacks = playbacks;
+        _playbackEnforcer = playbackEnforcer;
+        _libraryManager = libraryManager;
         _enforcer = enforcer;
         _activityLogger = activityLogger;
         _webhookNotifier = webhookNotifier;
@@ -87,8 +100,33 @@ public class StreamLimitController : ControllerBase
             _limitManager.GetEffectiveLimit,
             _limitManager.IsExempt,
             _limitManager.GetUserName,
-            _enforcedDevices.IsEnforced);
+            _enforcedDevices.IsEnforced,
+            _playbacks.GetSnapshot(),
+            GetItemName,
+            p => _playbackEnforcer.IsVideoTranscode(new PlaybackRef(p.DeviceId, p.PlaySessionId, p.IsVideo)),
+            Plugin.Instance?.Configuration is { EnableHardBlock: true, CountPlaybacks: true });
         return Ok(result);
+    }
+
+    // Item name for the live view: "Series - Episode" for an episode. Never throws.
+    private string? GetItemName(string itemId)
+    {
+        try
+        {
+            if (!Guid.TryParse(itemId, out var id))
+            {
+                return null;
+            }
+
+            var item = _libraryManager.GetItemById(id);
+            return item is Episode episode && !string.IsNullOrEmpty(episode.SeriesName)
+                ? episode.SeriesName + " - " + episode.Name
+                : item?.Name;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -140,6 +178,7 @@ public class StreamLimitController : ControllerBase
         // Cut the device's media responses still streaming (a direct-play download is one
         // long request) and free its slot now, instead of waiting for the abandoned-slot rule.
         var (aborted, stale, released) = _tracker.AbortDevice(userGuid, deviceId);
+        _playbacks.EndDevice(userGuid, deviceId);
         var target = sessions.FirstOrDefault();
         var loggedOut = logout
                         && await _enforcer.LogoutDeviceAsync(userGuid, target?.DeviceId ?? deviceId, "admin").ConfigureAwait(false);
@@ -189,6 +228,7 @@ public class StreamLimitController : ControllerBase
 
         var (released, aborted, stale) = _tracker.ResetUser(userGuid);
         var enforcedCleared = _enforcedDevices.ClearUser(userGuid);
+        _playbacks.ResetUser(userGuid);
 
         _logger.LogInformation(
             "Admin {Admin} reset the streams of user {UserId}: {Released} slot(s) released, {Aborted} live response(s) aborted, {Stale} stale registration(s) cleared, {Enforced} stopped device(s) cleared",

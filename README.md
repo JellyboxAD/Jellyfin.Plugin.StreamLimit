@@ -9,7 +9,7 @@ Limit the number of simultaneous streams per user on your Jellyfin server — wi
 | Jellyfin server | Plugin version | Build |
 |---|---|---|
 | **10.11.0 → 10.11.x** | `1.1.0.x` | `net9.0` |
-| **12.0 → 12.3** | `1.1.1.x` | `net10.0` |
+| **12.0 → 12.x** (tested up to 12.4) | `1.1.1.x` | `net10.0` |
 
 One manifest serves both: your server installs the right build automatically. Same features on both lines.
 
@@ -31,6 +31,8 @@ Installing from the repository is recommended: you get automatic updates and the
 - 🎮 **Per-user limits**, plus a **default limit** for everyone else
 - 👑 **Administrators exempt** by default (can be turned off)
 - 🚧 **Hard block at the HTTP level** *(BETA)*: media requests over the limit get `403` before a single byte is served. A stream that is never served cannot be played, whatever the client (native apps, Infuse, external players, custom apps).
+- 🗂️ **Count each playback, not each device** *(BETA, opt-in)*: browser tabs share one device id, so by default they count as one stream; this counts each of them
+- 🔥 **Video transcode limit per user** *(opt-in)*: caps how many video transcodes one account runs at once, so it cannot saturate the server's encoder
 - 🙅 **Clean refusal at setup** *(BETA)*: `PlaybackInfo` answers "playback not allowed", so clients fail before loading instead of spinning
 - 💬 **Your own message on web clients** *(BETA)*: one popup with your title/text instead of the generic dialog, in every language — with placeholders such as `{{devices}}` (where the user is already watching)
 - 📺 **Live view**: see exactly the streams that count (and why), stop one (optionally logging the device out) or reset a user's streams
@@ -49,37 +51,52 @@ Installing from the repository is recommended: you get automatic updates and the
 
 ## Configuration
 
-![Plugin Configuration](Readme-data/Config.png)
+Defaults are safe: install, set a limit, done. The settings page (**Dashboard → Stream Limiter**) has six tabs; changes are saved with the **Save** bar at the bottom, which also tells you when something is not saved yet.
 
-Defaults are safe: install, set a limit, done.
+### Live
 
-**Stream limits**
-- **Per-user limit**: pick a user and set their max simultaneous streams. Empty or `0` removes the entry (the default applies).
-- **Default limit**: applies to every user without an explicit limit. `0` = unlimited.
-- A paused stream still counts while its client keeps reporting playback to Jellyfin (most clients do, every few seconds). A media connection left open without sending anything (phone asleep, network lost, app killed) does not.
-- Administrators are not limited while *Exempt administrators* is on (default).
+<img src="Readme-data/Config-live.png" alt="Live tab: the streams counted right now, with Stop and Reset" width="760">
 
-**Enforcement**
-
-| Option | Default | What it does |
-|---|---|---|
-| Hard block at the HTTP level *(BETA)* | on | Rejects over-limit media requests before any byte is served. Off = classic stop-command behaviour only. |
-| Refuse playback negotiation *(BETA)* | on | Denies the stream during setup (`PlaybackInfo`). Requires the hard block. |
-| Kill transcode jobs | on | Stops the server-side ffmpeg job of a blocked stream. |
-| Log out the offending device | off | Revokes the device token. Most aggressive: the user must sign in again on that device. |
-| Strict mode *(BETA)* | off | Also rejects media requests whose user cannot be identified. Off = those are let through (fail-open). |
-| Exempt administrators | on | Administrators are never limited, whatever their own or the default limit. |
-| Record blocked streams in the activity log | on | Adds a *Dashboard → Activity* entry per block (user, device, client, IP), at most one per user and device every 5 minutes. |
-
-**Active streams** (top of the settings page)
 - Exactly the streams the plugin counts against the limit, per user and device — client, item, play method, IP, last activity, idle time — plus the devices the plugin just stopped. Refreshes every 5 seconds while the page is open.
 - Each stream says why it counts: **playing** (Jellyfin reports playback), **streaming** (a media response sent bytes in the last 90 s), **recent** (a media request in the last 60 s, e.g. HLS between segments). **Stopped** marks a device the plugin stopped whose client still keeps its session alive: shown, not counted.
+- **Several playbacks on one device** (typically browser tabs, which share one device and one Jellyfin session) are listed one by one under the device, with their title, start time and whether they transcode, so two tabs read as two simultaneous streams. They count once per device, or once each with *Count each playback*; a refused playback stays listed, marked with the rule that refused it, while its client is still trying.
 - Open connections that send nothing are not counted and not listed (their number is shown as *open responses* on the streams that are). They are cut after 30 minutes without a byte.
 - Exempt administrators only appear when their client reports playback (they bypass the HTTP gate, so they hold no slot).
 - **Stop** sends a stop command (a server-side stop for clients that can't receive it), kills its transcode, cuts the device's media downloads still in progress and frees its slot immediately; **Stop + log out** also logs the device out. Both are recorded in *Dashboard → Activity*. A stop is not a ban: the device can start again if the user is under their limit.
 - **Reset** (per user) is the last-resort fix when a user is counted with streams they don't have: it releases all of the user's slots (cutting their open media responses) and forgets the devices the plugin stopped, so only what Jellyfin really reports counts again.
 
-**Blocked message**
+### Limits
+
+<img src="Readme-data/Config-limits.png" alt="Limits tab: default limit and per-user limits" width="760">
+
+- **Per-user limit**: pick a user and set their max simultaneous streams. Empty or `0` removes the entry (the default applies).
+- **Default limit**: applies to every user without an explicit limit. `0` = unlimited.
+- A paused stream still counts while its client keeps reporting playback to Jellyfin (most clients do, every few seconds). A media connection left open without sending anything (phone asleep, network lost, app killed) does not.
+- Administrators are not limited while *Never limit administrators* is on (default); the table shows which limit applies to each user and why.
+- **Set the own limit of the users shown** applies one value to every user matching the search, in one go.
+
+### Blocking
+
+<img src="Readme-data/Config-blocking.png" alt="Blocking tab: hard block, playbacks and transcodes, aggressive options" width="760">
+
+| Option | Default | What it does |
+|---|---|---|
+| **Recommended** | | |
+| Hard block *(BETA)* | on | Rejects over-limit media requests at the HTTP level, before any byte is served. Off = classic stop-command behaviour only. |
+| Refuse playback before it starts *(BETA)* | on | Denies the stream during setup (`PlaybackInfo`). Requires the hard block. |
+| Stop the server transcode of a blocked stream | on | Stops the server-side ffmpeg job of a blocked stream. |
+| Never limit administrators | on | Administrators are never limited, whatever their own or the default limit. |
+| **Playbacks and transcodes** | | |
+| Count each playback, not each device *(BETA)* | off | Each playback counts (several browser tabs, or clients sending a copied device id), not just each device. A quality switch or the next episode is never refused. Requires the hard block. |
+| Video transcodes at once, per user | 0 (unlimited) | Above this number, the newest video transcode is stopped (ffmpeg job killed, its requests refused). Direct play, remux and audio are not counted. Works without the hard block. |
+| **Aggressive** | | |
+| Log out the device that went over the limit | off | Revokes the device token. Most aggressive: the user must sign in again on that device. |
+| Strict mode *(BETA)* | off | Also rejects media requests whose user cannot be identified. Off = those are let through (fail-open). |
+
+### Message
+
+<img src="Readme-data/Config-message.png" alt="Message tab: title, text, placeholders and a live preview" width="760">
+
 - **Title / Text**: your wording, shown when a stream is blocked. Placeholders, in both:
 
   | Placeholder | Replaced with |
@@ -89,15 +106,18 @@ Defaults are safe: install, set a limit, done.
   | `{{limit}}` | the user's limit |
   | `{{devices}}` | the other devices playing, comma-separated |
 
-  Example: `{{user}}, you are already watching on {{devices}} ({{active}}/{{limit}}).` Placeholders are case-insensitive; unknown ones are left as typed. They apply to the web popup and to the server message.
+  Example: `{{user}}, you are already watching on {{devices}} ({{active}}/{{limit}}).` Placeholders are case-insensitive; unknown ones are left as typed. They apply to the web popup and to the server message. The chips under the text insert them, and the preview shows the popup with sample values as you type.
 - **Show my message on web clients** *(BETA, on)*: replaces the web client's "not allowed" dialog with your popup (browser, Android app, iOS app). **No server restart needed**: turning it on/off or changing the title/text only needs a browser refresh. Works with read-only web folders (Docker, distro packages).
 - **Show my message on native apps** *(on)*: sends your title/text as a Jellyfin server message (`DisplayMessage`, shown for 10 s) to the blocked device when its app is native (Android TV, Swiftfin, Streamyfin, AFinity, Findroid, Jellyfin Media Player, Kodi…): those apps cannot show the web popup and would otherwise only show an error or an endless spinner. When the jellyfin-android app's native player is blocked, the message goes to the app's web UI instead (the player itself cannot receive it). At most one message per user and device every 30 s. Whether and how a native app displays it is up to the app.
 - **Also send the server message to web clients** *(off, advanced)*: web-based clients (browser, Android and iOS apps) already show your popup; this adds the server message on top, as a second dialog.
 
-**Notifications**
+### Notifications
+
+<img src="Readme-data/Config-notifications.png" alt="Notifications tab: activity log and webhook" width="760">
 
 | Option | Default | What it does |
 |---|---|---|
+| Record blocked streams in the activity log | on | Adds a *Dashboard → Activity* entry per block (user, device, client, IP), at most one per user and device every 5 minutes. |
 | Webhook URL | empty (off) | Discord webhook (`https://discord.com/api/webhooks/…`) → a Discord message. Any other `http(s)` URL → a JSON `POST` (below), which the Apprise API `/notify` endpoint accepts as-is. Only `http(s)` URLs are accepted (the settings page refuses others; one sent anyway is ignored on save and the previous URL kept). **Send test** posts a test event to the URL typed in the field. |
 | Notify when a stream is blocked | on | At most one notification per user and device every 5 minutes. |
 | Notify when an administrator stops a stream | off | Sent by the *Stop* buttons of the live view. |
@@ -113,9 +133,17 @@ Generic JSON body (`event` is `stream_blocked`, `admin_kick` or `test`):
 
 Webhooks are sent in the background with a 10 s timeout; failures are only logged (with the host, never the full URL). Payloads never contain access tokens.
 
+### Advanced
+
+<img src="Readme-data/Config-advanced.png" alt="Advanced tab: reset switches, stored configuration, management API" width="760">
+
+- **Reset switches to defaults** puts every switch back to its default; limits, message wording and the webhook URL are kept, and nothing changes until you save.
+- **Stored configuration** shows, read-only, the configuration version and the saved per-user limits (JSON with dashless user ids), handy for support.
+- **Management API** lists the admin endpoints (see [API](#api)).
+
 > **Upgrading from 1.0.x?** Nothing to do: on first start the plugin migrates your configuration (legacy dashed user ids and corrupted entries are cleaned automatically).
 >
-> **Upgrading to 1.1.0.2 / 1.1.1.2?** Administrators are now exempt by default — turn *Exempt administrators* off if your limits must apply to admins too.
+> **Upgrading to 1.1.0.2 / 1.1.1.2?** Administrators are now exempt by default — turn *Never limit administrators* off if your limits must apply to admins too.
 
 ## Client behaviour
 
@@ -146,6 +174,8 @@ Downloaded/offline items play from the device and cannot be blocked by the serve
 - theme songs and backdrop videos played while browsing never hold a slot;
 - requests that cannot be attributed to a user (API keys, anonymous) are never blocked, unless strict mode is on.
 
+**Playbacks and transcodes (opt-in).** Browser tabs share one device id, and Jellyfin merges them into a single session, but each playback still carries its own `PlaySessionId` in its media URLs (requests without one are keyed by device and item). With *Count each playback* on, every further live playback of a device counts as one more stream; with a transcode limit set, the plugin counts the user's playbacks that have a running ffmpeg job that does not copy the video (looked up through Jellyfin's transcode manager by `PlaySessionId`; a request without one is never counted as a transcode, a stream is never refused on a guess). A playback is live while it made a media request in the last 15 s or one of its responses sent bytes in the last 90 s. When a rule is exceeded, the **newest** playback is refused as soon as the overlap is confirmed: it is at least 5 s old and an older playback still made a media request after it started (or a direct-play download is still sending 8 s after it started). A quality switch or the next episode never confirms an overlap, since the old playback stops fetching the moment the new one starts, so it is never refused. In practice a second browser tab is refused within about 5 to 10 s. A refused playback gets `403` on its next request, its open responses are cut, its transcode is killed and it no longer holds a device slot; after 30 s it is checked again, so a client that keeps retrying plays again as soon as the user has freed a stream; the user, the activity log and the webhook are told as for any block, and the web popup stops the refused tab at once (it pauses the video and closes the player) instead of letting it play what it had already downloaded. It is checked on each media request, 6, 10 and 20 s after a playback starts (direct play makes no further request) and every minute.
+
 **Web message.** The plugin adds a `<script>` tag to the web client's `index.html` *as it is served* (a small middleware, compatible with a server BaseUrl). Nothing is written to the web folder, so it works with read-only installs and survives web updates; the setting is read on every page load, so toggling it needs no restart. Versions up to 1.1.0.1 wrote the tag into `index.html` on disk: it is removed automatically at startup (and on uninstall). The script detects a block (`X-StreamLimit` header or `PlaybackInfo` error, over both XHR and `fetch`), shows one popup with your title/text above the buffering spinner and hides the client's own error dialog. If anything goes wrong, the page is served unchanged and the client simply shows its built-in dialog — the block itself is never affected.
 
 **Reactive safety net.** When a playback start still goes over the limit, the plugin stops the newest stream: stop command (plus a server-side stop when the client cannot receive commands) → transcode kill → server message (native apps) → optional device logout. It counts one stream per device, and only sessions that reported playback in the last 3 minutes, so a crashed client can't get your new stream killed. A stopped device is then left out of the count for up to 10 minutes — until it reports a stop, its session ends or it is allowed to play again — because some clients keep reporting progress after being stopped (AFinity), never report the stop (Swiftfin on error) or cannot receive the stop command (jellyfin-android's native player).
@@ -158,7 +188,7 @@ Downloaded/offline items play from the device and cannot be blocked by the serve
 | Plugin logo missing on Jellyfin 12, disable/uninstall buttons fail | Fixed in `1.1.1.1`: update the plugin and restart. |
 | No logo after a manual install | Expected: Jellyfin only downloads the logo when installing from the repository. |
 | Custom web message not shown | Check that *Show my message on web clients* is on, then refresh the browser (hard reload). The server log says `web message script added to the web client` on the first page load. |
-| Limits don't apply to an admin account | Expected while *Exempt administrators* is on (default). |
+| Limits don't apply to an admin account | Expected while *Never limit administrators* is on (default). |
 | Limit not applied | Check the user's effective limit with `GET /StreamLimit/GetUserStreamLimit?userId=<id>` and the server log (entries from `Jellyfin.Plugin.StreamLimit`). |
 
 ## API

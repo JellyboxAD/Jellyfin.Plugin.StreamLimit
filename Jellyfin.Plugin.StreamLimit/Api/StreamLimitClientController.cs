@@ -123,9 +123,45 @@ public class StreamLimitClientController : ControllerBase
     } catch (e) { /* noop */ }
   }
 
+  // A refused playback must stop now, not when the player has used up what it had already
+  // downloaded ahead (up to a minute of video): pause every playing media element of this tab,
+  // then leave the player, otherwise its error recovery restarts the playback behind the popup
+  // (each retry is refused again, but starts a server transcode for nothing).
+  function stopPlayback() {
+    try {
+      var media = document.querySelectorAll('video, audio');
+      for (var i = 0; i < media.length; i++) {
+        if (!media[i].paused) { media[i].pause(); }
+      }
+    } catch (e) { /* noop */ }
+    try {
+      if ((location.hash || '').indexOf('#/video') === 0) { history.back(); }
+    } catch (e) { /* noop */ }
+  }
+
   function trigger(title, text) {
     suppressUntil = Date.now() + 6000;
+    retryBlockedUntil = Date.now() + 8000;
+    stopPlayback();
     showModal(title, text);
+    hideSpinner();
+    sweepDialogs();
+  }
+
+  // Right after a block, the player's error recovery asks for a new playback at once (twice
+  // with jellyfin-web 12). Each would be refused again, but only after the server started a
+  // transcode for it; answer those requests of THIS tab locally instead. Never extended by
+  // its own answers, so a later, deliberate attempt goes to the server as usual.
+  var retryBlockedUntil = 0;
+  var BLOCKED_INFO = JSON.stringify({ MediaSources: [], ErrorCode: 'NotAllowed' });
+
+  function isRetryOfBlocked(url) {
+    return Date.now() < retryBlockedUntil && /\/PlaybackInfo/i.test(url || '');
+  }
+
+  function refuseLocally() {
+    suppressUntil = Date.now() + 6000;
+    showModal(null, null);
     hideSpinner();
     sweepDialogs();
   }
@@ -145,6 +181,14 @@ public class StreamLimitClientController : ControllerBase
     };
     XMLHttpRequest.prototype.send = function () {
       var xhr = this;
+      if (isRetryOfBlocked(xhr.__slUrl)) {
+        try {
+          // Re-opened on a data: URL: the caller gets a normal "not allowed" answer.
+          open.call(xhr, 'GET', 'data:application/json,' + encodeURIComponent(BLOCKED_INFO));
+          refuseLocally();
+          return send.call(xhr);
+        } catch (e) { /* fall through: send it for real */ }
+      }
       xhr.addEventListener('load', function () {
         try {
           if (xhr.getResponseHeader && xhr.getResponseHeader('X-StreamLimit')) {
@@ -167,9 +211,14 @@ public class StreamLimitClientController : ControllerBase
     if (typeof window.fetch === 'function') {
       var origFetch = window.fetch;
       window.fetch = function (input, init) {
+        var url = '';
+        try { url = typeof input === 'string' ? input : ((input && input.url) || String(input || '')); } catch (e) { /* noop */ }
+        if (isRetryOfBlocked(url) && typeof Response === 'function') {
+          refuseLocally();
+          return Promise.resolve(new Response(BLOCKED_INFO, { status: 200, headers: { 'Content-Type': 'application/json' } }));
+        }
         var promise = origFetch.apply(this, arguments);
         try {
-          var url = typeof input === 'string' ? input : ((input && input.url) || String(input || ''));
           promise.then(function (res) {
             try {
               if (!res || !res.headers) { return; }

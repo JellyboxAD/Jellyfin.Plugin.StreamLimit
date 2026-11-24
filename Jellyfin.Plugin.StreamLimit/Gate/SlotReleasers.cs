@@ -17,6 +17,7 @@ public sealed class PlaybackStopSlotReleaser : IEventConsumer<PlaybackStopEventA
     private readonly StreamSlotTracker _tracker;
     private readonly EnforcedDeviceRegistry _enforcedDevices;
     private readonly PlaySessionRegistry _playSessions;
+    private readonly PlaybackTracker _playbacks;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PlaybackStopSlotReleaser"/> class.
@@ -24,11 +25,13 @@ public sealed class PlaybackStopSlotReleaser : IEventConsumer<PlaybackStopEventA
     /// <param name="tracker">The slot tracker.</param>
     /// <param name="enforcedDevices">The registry of devices the limit was enforced on.</param>
     /// <param name="playSessions">The registry of the sessions' PlaySessionIds.</param>
-    public PlaybackStopSlotReleaser(StreamSlotTracker tracker, EnforcedDeviceRegistry enforcedDevices, PlaySessionRegistry playSessions)
+    /// <param name="playbacks">The per-playback tracker.</param>
+    public PlaybackStopSlotReleaser(StreamSlotTracker tracker, EnforcedDeviceRegistry enforcedDevices, PlaySessionRegistry playSessions, PlaybackTracker playbacks)
     {
         _tracker = tracker;
         _enforcedDevices = enforcedDevices;
         _playSessions = playSessions;
+        _playbacks = playbacks;
     }
 
     /// <inheritdoc />
@@ -41,6 +44,7 @@ public sealed class PlaybackStopSlotReleaser : IEventConsumer<PlaybackStopEventA
         if (!userId.Equals(Guid.Empty) && !string.IsNullOrEmpty(deviceId))
         {
             _tracker.ReleaseDevice(userId, deviceId);
+            _playbacks.End(userId, deviceId, eventArgs.PlaySessionId);
         }
 
         if (session is not null && !userId.Equals(Guid.Empty))
@@ -63,6 +67,7 @@ public sealed class SessionEndedSlotReleaser : IEventConsumer<SessionEndedEventA
     private readonly StreamSlotTracker _tracker;
     private readonly EnforcedDeviceRegistry _enforcedDevices;
     private readonly PlaySessionRegistry _playSessions;
+    private readonly PlaybackTracker _playbacks;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SessionEndedSlotReleaser"/> class.
@@ -70,11 +75,13 @@ public sealed class SessionEndedSlotReleaser : IEventConsumer<SessionEndedEventA
     /// <param name="tracker">The slot tracker.</param>
     /// <param name="enforcedDevices">The registry of devices the limit was enforced on.</param>
     /// <param name="playSessions">The registry of the sessions' PlaySessionIds.</param>
-    public SessionEndedSlotReleaser(StreamSlotTracker tracker, EnforcedDeviceRegistry enforcedDevices, PlaySessionRegistry playSessions)
+    /// <param name="playbacks">The per-playback tracker.</param>
+    public SessionEndedSlotReleaser(StreamSlotTracker tracker, EnforcedDeviceRegistry enforcedDevices, PlaySessionRegistry playSessions, PlaybackTracker playbacks)
     {
         _tracker = tracker;
         _enforcedDevices = enforcedDevices;
         _playSessions = playSessions;
+        _playbacks = playbacks;
     }
 
     /// <inheritdoc />
@@ -90,6 +97,7 @@ public sealed class SessionEndedSlotReleaser : IEventConsumer<SessionEndedEventA
         if (!string.IsNullOrEmpty(session.DeviceId))
         {
             _tracker.ReleaseDevice(session.UserId, session.DeviceId);
+            _playbacks.EndDevice(session.UserId, session.DeviceId);
         }
 
         _enforcedDevices.Clear(session.UserId, PlayingSessions.StreamKey(session));

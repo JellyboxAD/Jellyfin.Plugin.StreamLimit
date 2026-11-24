@@ -47,6 +47,8 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
     private readonly IAuthorizationContext _authorizationContext;
     private readonly IDeviceManager _deviceManager;
     private readonly ILibraryManager _libraryManager;
+    private readonly PlaybackTracker _playbacks;
+    private readonly PlaybackLimitEnforcer _playbackEnforcer;
     private readonly ILogger<StreamGateFilter> _logger;
 
     /// <summary>
@@ -63,6 +65,8 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
     /// <param name="authorizationContext">Instance of the <see cref="IAuthorizationContext"/> interface.</param>
     /// <param name="deviceManager">Instance of the <see cref="IDeviceManager"/> interface.</param>
     /// <param name="libraryManager">Instance of the <see cref="ILibraryManager"/> interface.</param>
+    /// <param name="playbacks">The per-playback tracker.</param>
+    /// <param name="playbackEnforcer">The per-playback rules (count playbacks, transcode limit).</param>
     /// <param name="logger">The logger.</param>
     public StreamGateFilter(
         StreamSlotTracker tracker,
@@ -76,6 +80,8 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
         IAuthorizationContext authorizationContext,
         IDeviceManager deviceManager,
         ILibraryManager libraryManager,
+        PlaybackTracker playbacks,
+        PlaybackLimitEnforcer playbackEnforcer,
         ILogger<StreamGateFilter> logger)
     {
         _tracker = tracker;
@@ -89,6 +95,8 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
         _authorizationContext = authorizationContext;
         _deviceManager = deviceManager;
         _libraryManager = libraryManager;
+        _playbacks = playbacks;
+        _playbackEnforcer = playbackEnforcer;
         _logger = logger;
     }
 
@@ -99,10 +107,13 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
         var descriptor = context.ActionDescriptor as ControllerActionDescriptor;
         var kind = StreamGateEndpoints.Classify(descriptor?.ControllerName, descriptor?.ActionName);
 
+        // The hard block gates every limited user; the transcode limit works on its own too.
+        var hardBlock = configuration?.EnableHardBlock == true;
+        var transcodeRule = configuration?.MaxTranscodesPerUser > 0;
         if (kind == GateKind.None
             || configuration is null
-            || !configuration.EnableHardBlock
-            || (kind == GateKind.StartupCheck && !configuration.BlockPlaybackInfo))
+            || (!hardBlock && !transcodeRule)
+            || (kind == GateKind.StartupCheck && (!hardBlock || !configuration.BlockPlaybackInfo)))
         {
             await next().ConfigureAwait(false);
             return;
@@ -125,7 +136,7 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
             {
                 // Fail open by default: an unidentifiable request is Jellyfin's to
                 // police, not ours. Strict setups can opt into fail-closed.
-                if (kind == GateKind.MediaBytes && configuration.BlockUnidentifiedRequests)
+                if (kind == GateKind.MediaBytes && hardBlock && configuration.BlockUnidentifiedRequests)
                 {
                     _logger.LogInformation("Stream gate denied unidentified media request on {Path}", context.HttpContext.Request.Path);
                     var unidentified = RenderMessage(MessageValues.Empty);
@@ -147,14 +158,17 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
             return;
         }
 
-        var limit = _limitManager.GetEffectiveLimit(userId);
-        if (limit <= 0)
+        // limit: the device limit (hard block). The per-playback rules run on top of it.
+        var limit = hardBlock ? _limitManager.GetEffectiveLimit(userId) : 0;
+        var playbackLimit = limit > 0 ? _playbackEnforcer.GetPlaybackLimit(configuration, userId) : 0;
+        var transcodeLimit = kind == GateKind.MediaBytes ? _playbackEnforcer.GetTranscodeLimit(configuration, userId) : 0;
+        if (limit <= 0 && transcodeLimit <= 0)
         {
             await next().ConfigureAwait(false);
             return;
         }
 
-        var playingDeviceIds = GetPlayingDeviceIds(userId);
+        var playingDeviceIds = limit > 0 ? GetPlayingDeviceIds(userId) : Array.Empty<string>();
 
         if (kind == GateKind.StartupCheck)
         {
@@ -174,7 +188,7 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
             return;
         }
 
-        if (!_tracker.TryEnter(userId, deviceId, limit, playingDeviceIds))
+        if (limit > 0 && !_tracker.TryEnter(userId, deviceId, limit, playingDeviceIds))
         {
             _logger.LogInformation(
                 "Stream gate denied media request. User: {UserId}, device: {DeviceId}, limit: {Limit}, action: {Action}",
@@ -187,9 +201,63 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
             return;
         }
 
+        // Per playback: every gated playback is tracked (the live view shows several playbacks
+        // of one device, such as browser tabs); the two opt-in rules (count each playback, video
+        // transcode limit) are applied on top. Checked before the response is registered, so a
+        // refusal answers this request with a 403 instead of aborting it.
+        var playSessionId = GetPlaySessionId(context.HttpContext);
+        var itemId = GetItemId(context);
+        var tracked = false;
+        {
+            var isVideo = StreamGateEndpoints.CanTranscodeVideo(descriptor!.ActionName, context.HttpContext.Request.Query["static"].FirstOrDefault());
+            var observation = _playbacks.Observe(userId, deviceId, playSessionId, itemId, isVideo);
+            if (observation is not null)
+            {
+                tracked = true;
+                var refused = observation.DeniedReason;
+                if (refused is null)
+                {
+                    _playbackEnforcer.Check(userId);
+                    refused = _playbacks.GetDenial(userId, deviceId, playSessionId, itemId);
+                }
+
+                if (refused is not null)
+                {
+                    _logger.LogDebug(
+                        "Stream gate refused a request of playback {PlaySessionId} (user {UserId}, device {DeviceId}): {Reason}",
+                        playSessionId,
+                        userId,
+                        deviceId,
+                        refused);
+                    // TryEnter claimed (or refreshed) the device slot for this request: a refused
+                    // playback must not keep the device counting, unless another playback of
+                    // the device is really streaming.
+                    if (limit > 0 && !_playbacks.HasOtherLivePlayback(userId, deviceId, playSessionId, itemId))
+                    {
+                        _tracker.ReleaseDevice(userId, deviceId);
+                    }
+
+                    var playbackBlock = RenderMessage(MessageValues.Empty);
+                    TagBlockedResponse(context.HttpContext, playbackBlock);
+                    context.Result = Forbidden(playbackBlock.Text);
+                    return;
+                }
+
+                if (observation.IsNew && (playbackLimit > 0 || transcodeLimit > 0))
+                {
+                    // Direct-play and progressive streams make no further request to refuse:
+                    // check again once the overlap grace is over.
+                    _playbackEnforcer.ScheduleCheck(userId);
+                }
+            }
+        }
+
         // Admitted: if the reactive limiter stopped this device earlier, it is now a
         // legitimate stream again and its session must count normally.
-        _enforcedDevices.ClearOnReentry(userId, deviceId);
+        if (limit > 0)
+        {
+            _enforcedDevices.ClearOnReentry(userId, deviceId);
+        }
 
         // Hold the slot while the response really streams: a direct-play download is a
         // single request that can last hours and keeps counting as long as it writes bytes.
@@ -199,7 +267,16 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
         // the idle abort) cut this response; once the request is aborted or completed the
         // registration never counts again.
         var httpContext = context.HttpContext;
-        var registration = _tracker.BeginRequest(userId, deviceId, httpContext.Abort, httpContext.RequestAborted);
+        // Without a device limit (only the transcode limit applies) the response holds no slot.
+        var holdsSlot = limit > 0;
+        var registration = holdsSlot
+            ? _tracker.BeginRequest(userId, deviceId, httpContext.Abort, httpContext.RequestAborted)
+            : _tracker.CreateDetachedRequest(httpContext.Abort, httpContext.RequestAborted);
+        if (tracked)
+        {
+            _playbacks.Attach(userId, deviceId, playSessionId, itemId, registration);
+        }
+
         IHttpResponseBodyFeature? originalBody = null;
         try
         {
@@ -207,11 +284,11 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
             httpContext.Response.OnCompleted(
                 static state =>
                 {
-                    var (tracker, user, device, request) = ((StreamSlotTracker, Guid, string, StreamSlotTracker.MediaRequest))state;
-                    tracker.EndRequest(user, device, request);
+                    var (tracker, user, device, request, slot) = ((StreamSlotTracker, Guid, string, StreamSlotTracker.MediaRequest, bool))state;
+                    EndRegistration(tracker, user, device, request, slot);
                     return Task.CompletedTask;
                 },
-                (_tracker, userId, deviceId, registration));
+                (_tracker, userId, deviceId, registration, holdsSlot));
 
             originalBody = WrapResponseBody(httpContext, registration);
             await next().ConfigureAwait(false);
@@ -223,9 +300,31 @@ public sealed class StreamGateFilter : IAsyncResourceFilter
                 httpContext.Features.Set(originalBody);
             }
 
-            _tracker.EndRequest(userId, deviceId, registration);
+            EndRegistration(_tracker, userId, deviceId, registration, holdsSlot);
         }
     }
+
+    private static void EndRegistration(StreamSlotTracker tracker, Guid userId, string deviceId, StreamSlotTracker.MediaRequest registration, bool holdsSlot)
+    {
+        if (holdsSlot)
+        {
+            tracker.EndRequest(userId, deviceId, registration);
+        }
+        else
+        {
+            StreamSlotTracker.EndDetachedRequest(registration);
+        }
+    }
+
+    private static string? GetPlaySessionId(HttpContext httpContext)
+    {
+        // Query keys are case-insensitive: covers PlaySessionId and playSessionId.
+        var value = httpContext.Request.Query["PlaySessionId"].FirstOrDefault();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    private static string? GetItemId(ResourceExecutingContext context)
+        => context.RouteData.Values.TryGetValue("itemId", out var raw) ? raw?.ToString() : null;
 
     // Routes the response body through an ActivityStream so the tracker sees when bytes are
     // actually written. StreamResponseBodyFeature passes StartAsync/CompleteAsync through the

@@ -16,6 +16,43 @@ public class ActiveStreamsBuilderTests
     private static readonly Guid Bob = Guid.Parse("6c3f7c1e-2d4b-4a8f-9e01-abcdefabcdef");
     private static readonly DateTime Now = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
 
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 2)]
+    public void Build_ListsEachPlaybackOfOneDevice(bool countPlaybacks, int expectedCounted)
+    {
+        var browser = Session(Alice, "browser", "Chrome", "Movie A", PlayMethod.Transcode);
+        var slots = new[] { new StreamSlotTracker.SlotSnapshot(Alice, "browser", new DateTimeOffset(Now), 2, 2) };
+        var playbacks = new[]
+        {
+            new PlaybackSnapshot(Alice, "BROWSER", "tab-a", "item-a", true, new DateTimeOffset(Now.AddMinutes(-5)), new DateTimeOffset(Now), null),
+            new PlaybackSnapshot(Alice, "browser", "tab-b", "item-b", true, new DateTimeOffset(Now.AddSeconds(-30)), new DateTimeOffset(Now), null),
+            new PlaybackSnapshot(Alice, "browser", "tab-c", "item-c", true, new DateTimeOffset(Now.AddSeconds(-10)), new DateTimeOffset(Now), PlaybackDenialReason.TranscodeLimit),
+            new PlaybackSnapshot(Bob, "browser", "other-user", "item-x", true, new DateTimeOffset(Now), new DateTimeOffset(Now), null),
+        };
+
+        var result = ActiveStreamsBuilder.Build(
+            [browser],
+            slots,
+            Now,
+            _ => 2,
+            _ => false,
+            _ => "unused",
+            (_, _) => false,
+            playbacks,
+            id => "Name of " + id,
+            p => p.PlaySessionId == "tab-a",
+            countPlaybacks);
+
+        var stream = Assert.Single(Assert.Single(result).Streams);
+        Assert.Equal(new[] { "tab-a", "tab-b", "tab-c" }, stream.Playbacks.Select(p => p.PlaySessionId).ToArray());
+        Assert.Equal("Name of item-b", stream.Playbacks[1].ItemName);
+        Assert.True(stream.Playbacks[0].Transcoding);
+        Assert.False(stream.Playbacks[1].Transcoding);
+        Assert.Equal("transcode-limit", stream.Playbacks[2].Refused);
+        Assert.Equal(expectedCounted, stream.CountedStreams);
+    }
+
     [Fact]
     public void Build_MergesSessionsAndSlotsPerDevice()
     {

@@ -119,6 +119,22 @@
             #StreamLimiterConfigPage .sl-chip-streaming .sl-dot { background: var(--jf-palette-info-main, #0288d1); opacity: 1; }
             #StreamLimiterConfigPage .sl-chip-recent .sl-dot { background: var(--jf-palette-warning-main, #ed6c02); opacity: 1; }
             #StreamLimiterConfigPage .sl-counted { font-size: 0.82em; }
+            #StreamLimiterConfigPage .sl-playbacks { list-style: none; margin: 0.45em 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.3em; }
+            #StreamLimiterConfigPage .sl-playback {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: baseline;
+                gap: 0.2em 0.8em;
+                padding: 0.35em 0.6em;
+                border-left: 3px solid rgba(128, 128, 128, 0.45);
+                background: rgba(128, 128, 128, 0.08);
+                border-radius: 0 0.3em 0.3em 0;
+            }
+            #StreamLimiterConfigPage .sl-playback-refused { border-left-color: var(--jf-palette-error-main, #c62828); }
+            #StreamLimiterConfigPage .sl-playbackTitle { font-weight: 600; overflow-wrap: anywhere; }
+            #StreamLimiterConfigPage .sl-playbackMeta { font-size: 0.85em; opacity: 0.75; }
+            #StreamLimiterConfigPage .sl-playbackRefused { font-size: 0.82em; font-weight: 600; color: var(--jf-palette-error-main, #ef5350); }
+            #StreamLimiterConfigPage .sl-chip-multi { background: rgba(2, 136, 209, 0.22); }
             #StreamLimiterConfigPage .sl-empty { padding: 1.4em 1em; text-align: center; }
 
             /* ---- limits ---- */
@@ -339,6 +355,25 @@
                         </div>
 
                         <div class="sl-group">
+                            <h3 class="sl-groupTitle">Playbacks and transcodes</h3>
+                            <p class="fieldDescription sl-groupLead">Off by default. For stricter counting, and to protect the server from too many transcodes.</p>
+
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label>
+                                    <input id="CountPlaybacks" name="CountPlaybacks" type="checkbox" is="emby-checkbox" />
+                                    <span>Count each playback, not each device (beta)</span>
+                                </label>
+                                <div class="fieldDescription checkboxFieldDescription" id="slCountPlaybacksDesc">Browser tabs share one device, so by default they count as one stream. On, each playback counts. A quality switch or the next episode is never refused. Needs <em>Hard block</em>.</div>
+                            </div>
+
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="MaxTranscodesPerUser">Video transcodes at once, per user</label>
+                                <input id="MaxTranscodesPerUser" name="MaxTranscodesPerUser" type="number" is="emby-input" min="0" step="1" inputmode="numeric" />
+                                <div class="fieldDescription">Above this number, the newest transcode is stopped. Direct play, remux and audio are not counted. Empty or 0 = unlimited. Works without <em>Hard block</em>; administrators follow <em>Never limit administrators</em>.</div>
+                            </div>
+                        </div>
+
+                        <div class="sl-group">
                             <h3 class="sl-groupTitle">Aggressive</h3>
                             <p class="fieldDescription sl-groupLead">Off by default. Turn on only if the recommended options are not enough for a client.</p>
 
@@ -535,6 +570,8 @@
                     { key: 'ExemptAdministrators', type: 'bool', def: true },
                     { key: 'ForceLogoutOnLimit', type: 'bool', def: false },
                     { key: 'BlockUnidentifiedRequests', type: 'bool', def: false },
+                    { key: 'CountPlaybacks', type: 'bool', def: false },
+                    { key: 'MaxTranscodesPerUser', type: 'int', def: 0 },
                     { key: 'MessageTitle', type: 'text', def: 'Stream Limit' },
                     { key: 'MessageText', type: 'text', def: 'Active streams exceeded' },
                     { key: 'EnableWebMessage', type: 'bool', def: true },
@@ -833,8 +870,16 @@
                     return { value: 0, source: 'unlimited' };
                 }
 
+                // Streams counted against the limit: one per counted device, or one per playback
+                // when the server counts each playback (countedStreams, from 1.1.x.4).
                 function countedStreams(user) {
-                    return (user.streams || []).filter(isCounted).length;
+                    return (user.streams || []).filter(isCounted).reduce(function (sum, stream) {
+                        return sum + (typeof stream.countedStreams === 'number' && stream.countedStreams > 0 ? stream.countedStreams : 1);
+                    }, 0);
+                }
+
+                function livePlaybacks(stream) {
+                    return (stream.playbacks || []).filter(function (p) { return !p.refused; });
                 }
 
                 function updateSummary() {
@@ -854,6 +899,9 @@
                     }
                     if (loaded) {
                         parts.push('hard block ' + (savedValues.EnableHardBlock ? 'on' : 'off'));
+                        if (savedValues.MaxTranscodesPerUser > 0) {
+                            parts.push(plural(savedValues.MaxTranscodesPerUser, 'transcode') + ' per user');
+                        }
                     }
                     el('slSummary').textContent = parts.length ? parts.join(' · ') : 'Loading…';
                 }
@@ -1071,6 +1119,8 @@
                     var hardBlock = el('EnableHardBlock').checked;
                     el('BlockPlaybackInfo').disabled = !hardBlock;
                     el('slPlaybackInfoDesc').classList.toggle('sl-muted', !hardBlock);
+                    el('CountPlaybacks').disabled = !hardBlock;
+                    el('slCountPlaybacksDesc').classList.toggle('sl-muted', !hardBlock);
                 }
 
                 el('EnableHardBlock').addEventListener('change', updateDependencies);
@@ -1400,11 +1450,46 @@
                     }
                     chip.appendChild(document.createTextNode(chipText));
                     line.appendChild(chip);
-                    line.appendChild(make('span', 'sl-counted sl-muted', counted ? 'counted' : 'not counted'));
+                    var playbacks = stream.playbacks || [];
+                    var live = livePlaybacks(stream);
+                    var multi = playbacks.length > 1;
+                    if (multi) {
+                        // Browser tabs share one device (and one Jellyfin session): show each
+                        // playback, so two tabs read as two simultaneous streams.
+                        var multiChip = make('span', 'sl-chip sl-chip-multi', plural(live.length, 'playback') + ' at once');
+                        multiChip.title = 'Several playbacks on this one device (for example browser tabs)';
+                        line.appendChild(multiChip);
+                    }
+                    var countedLabel = !counted ? 'not counted'
+                        : (stream.countedStreams > 1 ? 'counted as ' + stream.countedStreams + ' streams' : 'counted');
+                    line.appendChild(make('span', 'sl-counted sl-muted', countedLabel));
                     body.appendChild(line);
 
-                    if (stream.itemName) {
-                        body.appendChild(make('div', 'sl-item secondary', stream.itemName));
+                    if (multi) {
+                        var list = make('ul', 'sl-playbacks');
+                        playbacks.forEach(function (p) {
+                            var li = make('li', 'sl-playback' + (p.refused ? ' sl-playback-refused' : ''));
+                            li.appendChild(make('span', 'sl-playbackTitle', p.itemName || 'Unknown item'));
+                            var bits = [];
+                            if (p.startedAt) { bits.push('started ' + formatTime(new Date(p.startedAt))); }
+                            bits.push(p.transcoding ? 'transcoding' : 'no transcode');
+                            li.appendChild(make('span', 'sl-playbackMeta', bits.join(' · ')));
+                            if (p.refused) {
+                                li.appendChild(make('span', 'sl-playbackRefused',
+                                    p.refused === 'transcode-limit' ? 'Refused: transcode limit' : 'Refused: over the limit'));
+                            }
+                            list.appendChild(li);
+                        });
+                        body.appendChild(list);
+                        if (counted && live.length > 1 && !(stream.countedStreams > 1)) {
+                            body.appendChild(make('div', 'sl-item secondary sl-muted',
+                                'These playbacks count as one stream (one device). Turn on "Count each playback" in Blocking to count each of them.'));
+                        }
+                    } else {
+                        var itemName = stream.itemName || (playbacks.length === 1 ? playbacks[0].itemName : null);
+                        if (itemName) {
+                            body.appendChild(make('div', 'sl-item secondary', itemName));
+                        }
                     }
 
                     var meta = make('dl', 'sl-meta secondary');
